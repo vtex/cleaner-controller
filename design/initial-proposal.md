@@ -56,6 +56,8 @@ spec:
         vtex.io/proxy: <nginx-proxy-id>
     includeWhenEvaluating: true
     delete: false # will be deleted when ksvc is deleted
+  # optional cloud event sink which will receive an event whenever this group of resources is deleted.
+  cloudEventSink: "http://my-sink"
   conditions:
   # conditions can be compiled by a validating webhook and if any fails (i.e syntax errors) we can reject the creation of the cleaner
   - >
@@ -100,7 +102,8 @@ _I'm fairly certain I read somewhere that `reconcile` is also called when the co
 * Otherwise:
   * Resolve targets with `includeWhenEvaluating = true` and, if we aren't yet, start watching their kinds with a [EnqueueRequestsFromMapFunc](https://pkg.go.dev/sigs.k8s.io/controller-runtime/pkg/handler#EnqueueRequestsFromMapFunc). This means that whenever there is a update to these objects, we will lookup our index of `.status.resolvedTargets` and enqueue a reconcile request for any `Cleaner` object that references the updated object. 
   * Evaluate conditions using [cel-go](https://github.com/vtex/cleaner-controller/blob/rfc/initial-proposal/design/initial-proposal.md):
-    * If all are true: trigger deletion of targets marked for deletion; the helm release, if present; and the cleaner object itself
+    * If all are true: trigger deletion of targets marked for deletion; the helm release, if present; and the cleaner object itself.
+      * Additionally, if `.spec.cloudEventSink` is specified, a [cloud event](https://cloudevents.io/) is sent to it. This allows resources outside of the cluster to also be cleaned. For the faststore use case, these are ECR images. 
     * Otherwise:
       * (Optional): if `.spec.retry.monotonic`, binary search when the condition might become true and schedule reconcile request for that time
       * Otherwise, schedule reconcile request for `.spec.retry.period` time in the future.
