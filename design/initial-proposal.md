@@ -99,7 +99,7 @@ _I'm fairly certain I read somewhere that `reconcile` is also called when the co
 * If TTL hasn't expired: schedule reconcile request for the time when it will be expired `(creationTimestamp + ttl)`
 * Otherwise:
   * Resolve targets with `includeWhenEvaluating = true` and, if we aren't yet, start watching their kinds with a [EnqueueRequestsFromMapFunc](https://pkg.go.dev/sigs.k8s.io/controller-runtime/pkg/handler#EnqueueRequestsFromMapFunc). This means that whenever there is a update to these objects, we will lookup our index of `.status.resolvedTargets` and enqueue a reconcile request for any `Cleaner` object that references the updated object. 
-  * Evaluate conditions using (cel-go)[https://github.com/vtex/cleaner-controller/blob/rfc/initial-proposal/design/initial-proposal.md]:
+  * Evaluate conditions using [cel-go](https://github.com/vtex/cleaner-controller/blob/rfc/initial-proposal/design/initial-proposal.md):
     * If all are true: trigger deletion of targets marked for deletion; the helm release, if present; and the cleaner object itself
     * Otherwise:
       * (Optional): if `.spec.retry.monotonic`, binary search when the condition might become true and schedule reconcile request for that time
