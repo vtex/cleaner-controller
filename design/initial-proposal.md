@@ -8,7 +8,7 @@ With the generalization of `proxy-launcher`'s API, its usefulness has increased 
 
 In order to facilitate this ordeal and ensure the timely deletion of ephemeral resources created through `proxy-launcher` API, we propose the creation of a _cleaner_ Kubernetes controller.
 
-## API Proposal
+### API Proposal
 
 ```yaml
 apiVersion: cleaner.vtex.dev/v1alpha
