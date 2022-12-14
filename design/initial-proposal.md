@@ -2,7 +2,11 @@
 
 ## Problem
 
-With the generalization of `proxy-launcher`'s API, its usefulness has increased and new resources are soon to be created by it. However, all of the resources planned to be released through its API are ephemeral in nature (e.g: jamstack `knative-services` and tekton `pipeline-run`). Currently there are specialized _cleaners_ and _curators_ to deal with these resources. Evidently, most of the logic is repeated across these implementations and each new type of resource requires a brand new implementation. In order to facilitate this ordeal and ensure the timely deletion of ephemeral resources created through `proxy-launcher` API, we propose the creation of a _cleaner_ kubernetes controller.
+With the generalization of `proxy-launcher`'s API, its usefulness has increased and new resources are soon to be created by it. However, all of the resources planned to be released through its API are ephemeral in nature (e.g: jamstack `knative-services` and tekton `pipeline-run`). Currently there are specialized _cleaners_ and _curators_ to deal with these resources. Evidently, most of the logic is repeated across these implementations and each new type of resource requires a brand-new implementation.
+
+## Proposal
+
+In order to facilitate this ordeal and ensure the timely deletion of ephemeral resources created through `proxy-launcher` API, we propose the creation of a _cleaner_ Kubernetes controller.
 
 ## API Proposal
 
