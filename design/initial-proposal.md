@@ -102,7 +102,7 @@ _I'm fairly certain I read somewhere that `reconcile` is also called when the co
 
 * `GET cleaner object`
   * If not found: discard reconcile request
-* If TTL hasn't expired: schedule reconcile request for the time when it will be expired `(creationTimestamp + ttl)`
+* If TTL hasn't expired: schedule reconcile request for the time when it will be expired with `ctrl.Result{RequeueAfter: time.Duration(...)}`
 * Otherwise:
   * Resolve targets with `includeWhenEvaluating = true` and, if we aren't yet, start watching their kinds with a [EnqueueRequestsFromMapFunc](https://pkg.go.dev/sigs.k8s.io/controller-runtime/pkg/handler#EnqueueRequestsFromMapFunc). This means that whenever there is a update to these objects, we will lookup our index of `.status.resolvedTargets` and enqueue a reconcile request for any `Cleaner` object that references the updated object. 
   * Evaluate conditions using [cel-go](https://github.com/vtex/cleaner-controller/blob/rfc/initial-proposal/design/initial-proposal.md):
@@ -111,12 +111,4 @@ _I'm fairly certain I read somewhere that `reconcile` is also called when the co
     * Otherwise:
       * (Optional): if `.spec.retry.monotonic`, binary search when the condition might become true and schedule reconcile request for that time
       * Otherwise, schedule reconcile request for `.spec.retry.period` time in the future.
-
-### Scheduling reconcile requests
-
-Scheduling isn't a feature found on `controller-runtime`, at least not that I am aware of. However the controller library does allow us to enqueue reconcile requests procedurally by pushing them to a `go` channel. So the proposed solution is to have a binary heap (a.k.a `priority queue`) in memory sorted by `time`, which will allow us to schedule up to millions of entries efficiently. We then peek the heap periodically and trigger all events with `time` in the past.
-
-If we ever reach the tens and hundreds of millions, the problem will most likely be memory and we'd need to have a database.
-
-
 
