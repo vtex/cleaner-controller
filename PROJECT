@@ -6,4 +6,14 @@ plugins:
   scorecard.sdk.operatorframework.io/v2: {}
 projectName: cleaner-controller
 repo: github.com/vtex/cleaner-controller
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: vtex.io
+  group: cleaner
+  kind: ConditionalTTL
+  path: github.com/vtex/cleaner-controller/api/v1alpha1
+  version: v1alpha1
 version: "3"

@@ -1,0 +1,12 @@
+apiVersion: cleaner.vtex.io/v1alpha1
+kind: ConditionalTTL
+metadata:
+  labels:
+    app.kubernetes.io/name: conditionalttl
+    app.kubernetes.io/instance: conditionalttl-sample
+    app.kubernetes.io/part-of: cleaner-controller
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: cleaner-controller
+  name: conditionalttl-sample
+spec:
+  # TODO(user): Add fields here
