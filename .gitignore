@@ -24,3 +24,6 @@ Dockerfile.cross
 *.swp
 *.swo
 *~
+
+# generate helm charts which shouldn't be committed
+cleaner
