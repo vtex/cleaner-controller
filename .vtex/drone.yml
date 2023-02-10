@@ -3,14 +3,29 @@ type: kubernetes
 name: default
 
 steps:
-- name: test
-  image: cimg/go:1.19.0
-  user: 0
+
+- name: Build and publish to ECR
+  #image: cimg/go:1.19.0
+  #user: 0
   environment:
     VERSION: 0.0.1_alpha
-  commands:
-  - make docker-build
-  - make docker-push
+  image: plugins/ecr
+  settings:
+    repo: cleaner-controller
+    registry: 558830342743.dkr.ecr.us-east-1.amazonaws.com
+    region: us-east-1
+    dockerfile: Dockerfile
+    create_repository: true
+    access_key:
+      from_secret: 558830342743_AWS_ACCESS_KEY_ID
+    secret_key:
+      from_secret: 558830342743_AWS_SECRET_ACCESS_KEY
+    tags:
+      - 0.0.1_alpha
+    build_args: ""
+      # commands:
+      #- make docker-build
+      #- make docker-push
   # - make test
   volumes:
   - name: dockersock
