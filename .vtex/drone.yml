@@ -3,13 +3,16 @@ type: kubernetes
 name: default
 
 steps:
-
-- name: Build and publish to ECR
+- name: test
   #image: cimg/go:1.19.0
-  #user: 0
-  environment:
-    VERSION: 0.0.1_alpha
+  image: golang:1.19
+  commands:
+  - make test
+
+- name: publish
   image: plugins/ecr
+  when:
+    event: tag
   settings:
     repo: cleaner-controller
     registry: 558830342743.dkr.ecr.us-east-1.amazonaws.com
@@ -21,11 +24,9 @@ steps:
     secret_key:
       from_secret: 558830342743_AWS_SECRET_ACCESS_KEY
     tags:
-      - 0.0.1_alpha
+      - ${DRONE_TAG##v}
     build_args:
-      TARGETARCH: amd64
-      TARGETOS: linux
-      # commands:
-      #- make docker-build
-      #- make docker-push
-  # - make test
+      - "TARGETARCH=amd64"
+trigger:
+  event:
+  - pull_request
