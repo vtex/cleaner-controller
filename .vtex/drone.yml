@@ -22,7 +22,6 @@ steps:
       from_secret: 558830342743_AWS_SECRET_ACCESS_KEY
     tags:
       - 0.0.1_alpha
-    build_args: ""
       # commands:
       #- make docker-build
       #- make docker-push
