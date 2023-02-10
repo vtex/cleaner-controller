@@ -27,10 +27,3 @@ steps:
       #- make docker-build
       #- make docker-push
   # - make test
-  volumes:
-  - name: dockersock
-    path: /var/run
-volumes:
-- name: dockersock
-  host:
-    path: /var/run/
