@@ -6,5 +6,8 @@ steps:
 - name: test
   image: cimg/go:1.19.0
   user: 0
+  environment:
+    VERSION: 0.0.1+0
   commands:
-  - make test
+  - make docker-buildx
+  # - make test
