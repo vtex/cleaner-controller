@@ -5,8 +5,8 @@ name: default
 steps:
 - name: helmify
   image: golang:1.19
-  environment:
-    VERSION: "0.0.1"
+  when:
+    event: tag
   commands:
   - make helm
   - mkdir -p dist
@@ -16,8 +16,8 @@ steps:
     name: cleaner
     description: A Helm chart for Kubernetes
     type: application
-    version: ${VERSION}
-    appVersion: "${VERSION}"
+    version: ${DRONE_TAG##v}
+    appVersion: "${DRONE_TAG##v}"
     EOF
 
   - tar -czvf dist/cleaner-chart.tar.gz -C ./cleaner .
@@ -28,8 +28,8 @@ steps:
     api_key:
       from_secret: GIT_TOKEN
     files: dist/*
-  #when:
-  #  event: tag
+  when:
+    event: tag
 
 - name: fail
   image: golang:1.19
