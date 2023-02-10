@@ -8,12 +8,12 @@ steps:
   when:
     event: tag
   commands:
-  - make helm
+  - make helm VERSION=${DRONE_TAG##v}
+  - cat ./cleaner/values.yaml
   - curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
   - helm package ./cleaner --app-version ${DRONE_TAG##v} --version ${DRONE_TAG##v}
   - mkdir -p dist
   - mv ./cleaner-${DRONE_TAG##v}.tgz dist/cleaner.tgz
-  #- tar -czvf dist/cleaner-chart.tar.gz -C ./cleaner .
 
 - name: publish-helm
   image: plugins/github-release
