@@ -11,3 +11,10 @@ steps:
   commands:
   - make docker-buildx
   # - make test
+  volumes:
+  - name: dockersock
+    path: /var/run
+volumes:
+- name: dockersock
+  host:
+    path: /var/run/
