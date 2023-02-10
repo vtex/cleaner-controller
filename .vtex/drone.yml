@@ -3,32 +3,6 @@ type: kubernetes
 name: default
 
 steps:
-- name: helmify
-  image: golang:1.19
-  when:
-    event: tag
-  commands:
-  - make helm VERSION=${DRONE_TAG##v}
-  - cat ./cleaner/values.yaml
-  - curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-  - helm package ./cleaner --app-version ${DRONE_TAG##v} --version ${DRONE_TAG##v}
-  - mkdir -p dist
-  - mv ./cleaner-${DRONE_TAG##v}.tgz dist/cleaner.tgz
-
-- name: publish-helm
-  image: plugins/github-release
-  settings:
-    api_key:
-      from_secret: GIT_TOKEN
-    files: dist/*
-  when:
-    event: tag
-
-- name: fail
-  image: golang:1.19
-  commands:
-  - exit 1
-
 - name: test
   #image: cimg/go:1.19.0
   image: golang:1.19
@@ -53,6 +27,27 @@ steps:
       - ${DRONE_TAG##v}
     build_args:
       - "TARGETARCH=amd64"
+
+- name: helmify
+  image: golang:1.19
+  when:
+    event: tag
+  commands:
+  - make helm VERSION=${DRONE_TAG##v}
+  - cat ./cleaner/values.yaml
+  - curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  - helm package ./cleaner --app-version ${DRONE_TAG##v} --version ${DRONE_TAG##v}
+  - mkdir -p dist
+  - mv ./cleaner-${DRONE_TAG##v}.tgz dist/cleaner.tgz
+
+- name: publish-helm
+  image: plugins/github-release
+  settings:
+    api_key:
+      from_secret: GIT_TOKEN
+    files: dist/*
+  when:
+    event: tag
 trigger:
   event:
   - pull_request
