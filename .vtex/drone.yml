@@ -10,14 +10,15 @@ steps:
   commands:
   - make helm
   - mkdir -p dist
-  - | cat <<EOF > cleaner/Chart.yaml
-    apiVersion: v2
-    name: cleaner
-    description: A Helm chart for Kubernetes
-    type: application
-    version: ${VERSION}
-    appVersion: "${VERSION}"
-    EOF
+  - | 
+  cat <<EOF > cleaner/Chart.yaml
+  apiVersion: v2
+  name: cleaner
+  description: A Helm chart for Kubernetes
+  type: application
+  version: ${VERSION}
+  appVersion: "${VERSION}"
+  EOF
 
   - tar -czvf dist/cleaner-chart.tar.gz -C ./cleaner .
 
