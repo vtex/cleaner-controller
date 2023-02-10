@@ -13,7 +13,6 @@ steps:
   - curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
   - helm package ./cleaner --app-version ${DRONE_TAG##v} --version ${DRONE_TAG##v}
   - mkdir -p dist
-  
   - mv ./cleaner-${DRONE_TAG##v}.tgz dist/cleaner.tgz
 
 - name: publish-helm
