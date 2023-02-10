@@ -9,7 +9,8 @@ steps:
   environment:
     VERSION: 0.0.1_alpha
   commands:
-  - make docker-buildx
+  - make docker-build
+  - make docker-push
   # - make test
   volumes:
   - name: dockersock
