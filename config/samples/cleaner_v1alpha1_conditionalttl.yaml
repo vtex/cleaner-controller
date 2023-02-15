@@ -1,0 +1,46 @@
+apiVersion: cleaner.vtex.io/v1alpha1
+kind: ConditionalTTL
+metadata:
+  labels:
+    app.kubernetes.io/name: conditionalttl
+    app.kubernetes.io/instance: conditionalttl-sample
+    app.kubernetes.io/part-of: cleaner-controller
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: cleaner-controller
+  name: conditionalttl-sample
+spec:
+  ttl: 10s
+  retry:
+    period: 5s
+  helm:
+    release: sfj-3f8a1a2--nextjs
+    delete: false
+  targets:
+    - name: timer
+      delete: false
+      includeWhenEvaluating: false
+      reference:
+        apiVersion: serving.knative.dev/v1
+        kind: service
+        name: sfj-3f8a1a2--nextjs
+    - name: revisions
+      delete: true
+      includeWhenEvaluating: true
+      reference:
+        apiVersion: serving.knative.dev/v1
+        kind: revision
+        labelSelector:
+          matchLabels:
+            serving.knative.dev/service: sfj-3f8a1a2--nextjs
+  conditions:
+  - |
+    !revisions.items.exists(r,
+      r.metadata.annotations.exists(k, k == "serving.knative.dev/routes")
+      && r.metadata.annotations["serving.knative.dev/routes"]
+        .split(",")
+        .exists(route, !route.startsWith("sfj-") && !route.startsWith("preview-"))
+      ||
+      r.status.conditions
+        .filter(c, c.type == "Active")
+        .exists(c, c.status == "True" || time - timestamp(c.lastTransitionTime) < duration("0h"))
+      ) 

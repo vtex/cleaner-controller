@@ -1,0 +1,40 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  creationTimestamp: null
+  name: manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - cleaner.vtex.io
+  resources:
+  - conditionalttls
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - cleaner.vtex.io
+  resources:
+  - conditionalttls/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - cleaner.vtex.io
+  resources:
+  - conditionalttls/status
+  verbs:
+  - get
+  - patch
+  - update
