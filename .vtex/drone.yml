@@ -42,6 +42,7 @@ steps:
   - git config --global user.name 'helm-repo-gen'
   - git add repo
   - git commit -m '[automated] update helm repository'
+  - echo ${DRONE_BRANCH}
   - git push origin HEAD:chore/cicd
 
 
