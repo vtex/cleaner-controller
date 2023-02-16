@@ -46,7 +46,7 @@ steps:
   - git add repo
   - git commit -m '[automated] update helm repository'
   - echo ${DRONE_BRANCH}
-  - git remote add auth_origin https://FelipeNascimento:${GIT_TOKEN}@github.com/vtex/cleaner-controller
+  - git remote add auth_origin https://FelipeNascimento:${GIT_TOKEN}@github.com/vtex/cleaner-controller.git
   - git push auth_origin HEAD:chore/cicd
 
 
