@@ -27,14 +27,6 @@ steps:
 #     build_args:
 #       - "TARGETARCH=amd64"
 
-- name: git-push
-  image: appleboy/drone-git-push
-  settings:
-    branch: master
-    remote: git@git.heroku.com:falling-wind-1624.git
-    force: false
-    commit: true
-
 - name: helmify
   image: golang:1.19
   environment:
