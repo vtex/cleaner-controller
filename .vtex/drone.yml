@@ -3,30 +3,29 @@ type: kubernetes
 name: default
 
 steps:
-- name: test
-  #image: cimg/go:1.19.0
-  image: golang:1.19
-  commands:
-  - make test
+# - name: test
+#   image: golang:1.19
+#   commands:
+#   - make test
 
-- name: publish-ecr
-  image: plugins/ecr
-  when:
-    event: tag
-  settings:
-    repo: cleaner-controller
-    registry: 558830342743.dkr.ecr.us-east-1.amazonaws.com
-    region: us-east-1
-    dockerfile: Dockerfile
-    create_repository: true
-    access_key:
-      from_secret: 558830342743_AWS_ACCESS_KEY_ID
-    secret_key:
-      from_secret: 558830342743_AWS_SECRET_ACCESS_KEY
-    tags:
-      - ${DRONE_TAG##v}
-    build_args:
-      - "TARGETARCH=amd64"
+# - name: publish-ecr
+#   image: plugins/ecr
+#   when:
+#     event: tag
+#   settings:
+#     repo: cleaner-controller
+#     registry: 558830342743.dkr.ecr.us-east-1.amazonaws.com
+#     region: us-east-1
+#     dockerfile: Dockerfile
+#     create_repository: true
+#     access_key:
+#       from_secret: 558830342743_AWS_ACCESS_KEY_ID
+#     secret_key:
+#       from_secret: 558830342743_AWS_SECRET_ACCESS_KEY
+#     tags:
+#       - ${DRONE_TAG##v}
+#     build_args:
+#       - "TARGETARCH=amd64"
 
 - name: helmify
   image: golang:1.19
@@ -37,18 +36,24 @@ steps:
   - cat ./cleaner/values.yaml
   - curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
   - helm package ./cleaner --app-version ${DRONE_TAG##v} --version ${DRONE_TAG##v}
-  - mkdir -p dist
-  - mv ./cleaner-${DRONE_TAG##v}.tgz dist/cleaner.tgz
+  - mkdir -p repo
+  - mv ./cleaner-${DRONE_TAG##v}.tgz ./repo
+  - helm repo index repo --url https://vtex.github.io/cleaner-controller
+  - git config --global user.name 'helm-repo-gen'
+  - git add repo
+  - git commit -m '[automated] update helm repository'
+  - git push
 
-- name: publish-helm
-  image: plugins/github-release
-  settings:
-    api_key:
-      from_secret: GIT_TOKEN
-    files: dist/*
-  when:
-    event: tag
-trigger:
-  event:
-  - pull_request
-  - tag
+
+# - name: publish-helm
+#   image: plugins/github-release
+#   settings:
+#     api_key:
+#       from_secret: GIT_TOKEN
+#     files: dist/*
+#   when:
+#     event: tag
+# trigger:
+#   event:
+#   - pull_request
+#   - tag
