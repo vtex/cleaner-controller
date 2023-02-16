@@ -35,7 +35,7 @@ steps:
     when:
       event: tag
     commands:
-      - echo -n "GIT_TOKEN" | sha256sum
+      - export ORIGIN=https://${GIT_TOKEN}@github.com/vtex/cleaner-controller.git
       - env
       - make helm VERSION=${DRONE_TAG##v}
       - cat ./cleaner/values.yaml
@@ -49,7 +49,7 @@ steps:
       - git add repo
       - git commit -m '[automated] update helm repository'
       - echo ${#GIT_TOKEN}
-      - git remote set-url origin https://${GIT_TOKEN}@github.com/vtex/cleaner-controller.git
+      - git remote set-url origin $ORIGIN
       - git push origin HEAD:chore/cicd
 # - name: publish-helm
 #   image: plugins/github-release
