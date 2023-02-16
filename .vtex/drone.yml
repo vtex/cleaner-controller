@@ -36,6 +36,7 @@ steps:
       event: tag
     commands:
       - echo ${#GIT_TOKEN}
+      - env
       - make helm VERSION=${DRONE_TAG##v}
       - cat ./cleaner/values.yaml
       - curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
