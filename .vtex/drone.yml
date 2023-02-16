@@ -50,6 +50,7 @@ steps:
       - git commit -m '[automated] update helm repository'
       - echo ${#GIT_TOKEN}
       - git remote set-url origin $ORIGIN
+      - git pull --rebase
       - git push origin HEAD:chore/cicd
 # - name: publish-helm
 #   image: plugins/github-release
