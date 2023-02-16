@@ -35,7 +35,7 @@ steps:
     when:
       event: tag
     commands:
-      - export ORIGIN=$(printf "%s@github.com/vtex/cleaner-controller.git" $${GIT_TOKEN})
+      - export ORIGIN=$(printf "https://%s@github.com/vtex/cleaner-controller.git" $${GIT_TOKEN})
       - env
       - make helm VERSION=${DRONE_TAG##v}
       - cat ./cleaner/values.yaml
