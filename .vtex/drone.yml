@@ -29,6 +29,9 @@ steps:
 
 - name: helmify
   image: golang:1.19
+  environment:
+    GIT_TOKEN:
+      from_secret: GIT_TOKEN
   when:
     event: tag
   commands:
@@ -43,7 +46,8 @@ steps:
   - git add repo
   - git commit -m '[automated] update helm repository'
   - echo ${DRONE_BRANCH}
-  - git push origin HEAD:chore/cicd
+  - git remote add auth_origin https://${GIT_TOKEN}@github.com/vtex/cleaner-controller
+  - git push auth_origin HEAD:chore/cicd
 
 
 # - name: publish-helm
