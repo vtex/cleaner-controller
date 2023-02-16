@@ -1,0 +1,54 @@
+kind: pipeline
+type: kubernetes
+name: default
+
+steps:
+  - name: test
+    image: golang:1.19
+    commands:
+    - make test
+
+  - name: publish-ecr
+    image: plugins/ecr
+    when:
+      event: tag
+    settings:
+      repo: cleaner-controller
+      registry: 558830342743.dkr.ecr.us-east-1.amazonaws.com
+      region: us-east-1
+      dockerfile: Dockerfile
+      create_repository: true
+      access_key:
+        from_secret: 558830342743_AWS_ACCESS_KEY_ID
+      secret_key:
+        from_secret: 558830342743_AWS_SECRET_ACCESS_KEY
+      tags:
+        - ${DRONE_TAG##v}
+      build_args:
+        - "TARGETARCH=amd64"
+
+  - name: helmify
+    image: golang:1.19
+    environment:
+      GIT_TOKEN:
+        from_secret: GIT_TOKEN
+    when:
+      event: tag
+    commands:
+      - export ORIGIN=$(printf "https://%s@github.com/vtex/cleaner-controller.git" $${GIT_TOKEN})
+      - git config --global user.name ${DRONE_COMMIT_AUTHOR}
+      - git config --global user.email ${DRONE_COMMIT_AUTHOR_EMAIL}
+      - git remote set-url origin $ORIGIN
+      - git pull --rebase origin main
+
+      - make helm VERSION=${DRONE_TAG##v}
+      - curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      - helm package ./cleaner --app-version ${DRONE_TAG##v} --version ${DRONE_TAG##v}
+      - mkdir -p repo
+      - mv ./cleaner-${DRONE_TAG##v}.tgz ./repo
+      - helm repo index repo --url https://vtex.github.io/cleaner-controller
+
+      - git add repo
+      - git commit -m '[automated] update helm repository'
+      - git checkout .
+      - git push origin HEAD:main
