@@ -27,6 +27,14 @@ steps:
 #     build_args:
 #       - "TARGETARCH=amd64"
 
+- name: git-push
+  image: appleboy/drone-git-push
+  settings:
+    branch: master
+    remote: git@git.heroku.com:falling-wind-1624.git
+    force: false
+    commit: true
+
 - name: helmify
   image: golang:1.19
   environment:
@@ -42,12 +50,13 @@ steps:
   - mkdir -p repo
   - mv ./cleaner-${DRONE_TAG##v}.tgz ./repo
   - helm repo index repo --url https://vtex.github.io/cleaner-controller
-  - git config --global user.name 'helm-repo-gen'
+  - git config --global user.name ${DRONE_COMMIT_AUTHOR}
+  - git config --global user.email ${DRONE_COMMIT_AUTHOR_EMAIL}
   - git add repo
   - git commit -m '[automated] update helm repository'
-  - echo ${DRONE_BRANCH}
-  - git remote add auth_origin https://FelipeNascimento:${GIT_TOKEN}@github.com/vtex/cleaner-controller.git
-  - git push auth_origin HEAD:chore/cicd
+  - echo ${#GIT_TOKEN}
+  - git remote set-url origin https://${GIT_TOKEN}@github.com/vtex/cleaner-controller.git
+  - git push origin HEAD:chore/cicd
 
 
 # - name: publish-helm
