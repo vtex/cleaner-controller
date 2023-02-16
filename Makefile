@@ -105,9 +105,19 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test ./... -coverprofile cover.out
 
+.PHONY: helm
 helm: manifests kustomize helmify ## Generate Helm chart.
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
 	$(KUSTOMIZE) build config/default | $(HELMIFY) cleaner
+
+.PHONY: coverage
+coverage: ## Opens HTML coverage report on browser.
+	go tool cover -html=cover.out
+
+.PHONY: gen-docs
+gen-docs: crd-ref-docs ## Generates Markdown API Reference.
+	$(CRD_REF_DOCS) --source-path=./api/v1alpha1 --renderer=markdown
+	mv out.md ./docs/api-reference.md
 
 ##@ Build
 
@@ -182,6 +192,7 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 HELMIFY ?= $(LOCALBIN)/helmify
+CRD_REF_DOCS ?= $(LOCALBIN)/crd-ref-docs
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v3.8.7
@@ -263,5 +274,10 @@ catalog-push: ## Push a catalog image.
 helmify: $(HELMIFY) ## Download helmify locally if necessary.
 $(HELMIFY): $(LOCALBIN)
 	test -s $(LOCALBIN)/helmify || GOBIN=$(LOCALBIN) go install github.com/arttor/helmify/cmd/helmify@latest
+
+.PHONY: crd-ref-docs
+crd-ref-docs: $(CRD_REF_DOCS) ## Download crd-ref-docs locally if necessary.
+$(CRD_REF_DOCS): $(LOCALBIN)
+	test -s $(LOCALBIN)/crd-ref-docs || GOBIN=$(LOCALBIN) go install github.com/elastic/crd-ref-docs@v0.0.8
     
 
