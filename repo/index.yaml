@@ -1,0 +1,14 @@
+apiVersion: v1
+entries:
+  cleaner:
+  - apiVersion: v2
+    appVersion: 0.0.1
+    created: "2023-02-16T20:12:43.244490843Z"
+    description: A Helm chart for Kubernetes
+    digest: a7b39a62305ba89aa1997be31b36adcf59254f143231d3cd7c5e039a8ce246a0
+    name: cleaner
+    type: application
+    urls:
+    - https://vtex.github.io/cleaner-controller/cleaner-0.0.1.tgz
+    version: 0.0.1
+generated: "2023-02-16T20:12:43.243846716Z"
