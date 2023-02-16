@@ -53,7 +53,7 @@ steps:
       - git status
       - git checkout .
       - git status
-      - git pull --rebase
+      - git pull --rebase origin chore/cicd
       - git push origin HEAD:chore/cicd
 # - name: publish-helm
 #   image: plugins/github-release
