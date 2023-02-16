@@ -35,7 +35,7 @@ steps:
     when:
       event: tag
     commands:
-      - echo ${#GIT_TOKEN}
+      - echo -n "GIT_TOKEN" | sha256sum
       - env
       - make helm VERSION=${DRONE_TAG##v}
       - cat ./cleaner/values.yaml
