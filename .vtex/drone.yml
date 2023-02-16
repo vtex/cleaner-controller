@@ -36,7 +36,11 @@ steps:
       event: tag
     commands:
       - export ORIGIN=$(printf "https://%s@github.com/vtex/cleaner-controller.git" $${GIT_TOKEN})
-      - env
+      - git config --global user.name ${DRONE_COMMIT_AUTHOR}
+      - git config --global user.email ${DRONE_COMMIT_AUTHOR_EMAIL}
+      - git remote set-url origin $ORIGIN
+      - git pull --rebase origin chore/cicd
+
       - make helm VERSION=${DRONE_TAG##v}
       - cat ./cleaner/values.yaml
       - curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
@@ -44,16 +48,12 @@ steps:
       - mkdir -p repo
       - mv ./cleaner-${DRONE_TAG##v}.tgz ./repo
       - helm repo index repo --url https://vtex.github.io/cleaner-controller
-      - git config --global user.name ${DRONE_COMMIT_AUTHOR}
-      - git config --global user.email ${DRONE_COMMIT_AUTHOR_EMAIL}
+      
       - git add repo
       - git commit -m '[automated] update helm repository'
-      - echo ${#GIT_TOKEN}
-      - git remote set-url origin $ORIGIN
       - git status
       - git checkout .
       - git status
-      - git pull --rebase origin chore/cicd
       - git push origin HEAD:chore/cicd
 # - name: publish-helm
 #   image: plugins/github-release
