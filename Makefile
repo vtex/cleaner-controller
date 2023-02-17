@@ -278,6 +278,8 @@ $(HELMIFY): $(LOCALBIN)
 .PHONY: crd-ref-docs
 crd-ref-docs: $(CRD_REF_DOCS) ## Download crd-ref-docs locally if necessary.
 $(CRD_REF_DOCS): $(LOCALBIN)
-	test -s $(LOCALBIN)/crd-ref-docs || GOBIN=$(LOCALBIN) go install github.com/elastic/crd-ref-docs@v0.0.8
-    
+	test -s $(LOCALBIN)/crd-ref-docs || \
+	GOBIN=$(LOCALBIN) go install github.com/elastic/crd-ref-docs@3a11386f88f173eaf44c9542369ee060b038a58d
+    # grabbing a specific commit because 0.0.9 which includes `useRawDocstring` 
+	# and correctly handles embedded fields hasn't been released
 

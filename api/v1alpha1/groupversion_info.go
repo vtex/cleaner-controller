@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package v1alpha1 contains API Schema definitions for the cleaner v1alpha1 API group
+// Package v1alpha1 contains API Schema definitions for the cleaner v1alpha1 API group.
 // +kubebuilder:object:generate=true
 // +groupName=cleaner.vtex.io
 package v1alpha1
