@@ -1,4 +1,6 @@
-# cleaner-controller
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=vtex_cleaner-controller&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=vtex_cleaner-controller)
+
+# Cleaner Controller
 
 ## Development Cheat Sheet
 
