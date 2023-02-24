@@ -46,7 +46,7 @@ steps:
       - helm package ./cleaner --app-version ${DRONE_TAG##v} --version ${DRONE_TAG##v}
       - mkdir -p repo
       - mv ./cleaner-${DRONE_TAG##v}.tgz ./repo
-      - helm repo index repo --url https://vtex.github.io/cleaner-controller
+      - helm repo index repo --url https://vtex.github.io/cleaner-controller/repo
 
       - git add repo
       - git commit -m '[automated] update helm repository'
