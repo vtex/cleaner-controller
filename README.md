@@ -1,4 +1,4 @@
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=vtex_cleaner-controller&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=vtex_cleaner-controller)
+[![Build Status](https://drone-robots.vtex.com/api/badges/vtex/cleaner-controller/status.svg?ref=refs/heads/main)](https://drone-robots.vtex.com/vtex/cleaner-controller) [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=vtex_cleaner-controller&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=vtex_cleaner-controller)
 
 # Cleaner Controller
 
