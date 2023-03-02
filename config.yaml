@@ -1,0 +1,19 @@
+# Options used by the api docs generator
+# https://github.com/elastic/crd-ref-docs
+#
+# To regenerate the docs, use `make gen-docs`
+
+processor:
+  # RE2 regular expressions describing types that should be excluded from the generated documentation.
+  ignoreTypes: 
+    - "ConditionalTTLList$"
+    - "TargetStatus$"
+  # RE2 regular expressions describing type fields that should be excluded from the generated documentation.
+  ignoreFields:
+    - "status$"
+    - "ConditionalTTL.TypeMeta$"
+  useRawDocstring: true
+
+render:
+  # Version of Kubernetes to use when generating links to Kubernetes API documentation.
+  kubernetesVersion: 1.24

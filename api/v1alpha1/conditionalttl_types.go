@@ -21,7 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// RetryConfig defines how the controller will retry the condition.
+// RetryConfig defines how the controller should retry evaluating the
+// set of conditions.
 type RetryConfig struct {
 	// Period defines how long the controller should wait before retrying
 	// the condition.
@@ -30,17 +31,22 @@ type RetryConfig struct {
 	Period *metav1.Duration `json:"period"`
 }
 
-// HelmConfig defines the helm release associated with the targetted resources
-// and whether the release should be deleted.
+// HelmConfig specifies a Helm release by its name and whether
+// the release should be deleted.
 type HelmConfig struct {
-	// Release is the Helm release name.
+	// The Helm Release name.
 	Release string `json:"release,omitempty"`
 
-	// Delete specifies whether the Helm release should be deleted
-	// whenever the ConditionalTTL is triggered.
+	// Delete specifies whether the Helm release should be deleted.
 	Delete bool `json:"delete,omitempty"`
 }
 
+// TargetReference declares how a target group should be looked up.
+// A target group can reference either a single Kubernetes resource - in which case
+// finding it is required in other to evaluate the set of conditions - or
+// a collection of resources of the same GroupVersionKind. In contrast
+// with single targets, an empty collection is a valid value when evaluating
+// the set of conditions.
 type TargetReference struct {
 	// TODO: apiVersion and kind of TypeMeta are optional, can they be made
 	// required without duplicating it?
@@ -57,58 +63,74 @@ type TargetReference struct {
 	LabelSelector *metav1.LabelSelector `json:"labelSelector"`
 }
 
-// Target declares how to find one or more resources related to the ConditionalTTL.
-// Targets are watched in order to trigger a reevaluation of the conditions and, when
-// the ConditionalTTl is triggered they might be deleted by the controller.
+// Target declares how to find one or more resources related to the ConditionalTTL,
+// whether they should be deleted and whether they are necessary for evaluating the
+// set of conditions.
 type Target struct {
-	// Name identifies this target group and identifies the target current
-	// state when evaluating the CEL conditions.
+	// Name identifies this target group and is used to refer to its state
+	// when evaluating the set of conditions.
 	// The name `time` is invalid and is included by default during evaluation.
 	// +kubebuilder:validation:Pattern=`^[^t].*|t($|[^i]).*|ti($|[^m]).*|tim($|[^e]).*|time.+`
 	Name string `json:"name"`
 
-	// Delete specifies whether this target group should be deleted
+	// Delete indicates whether this target group should be deleted
 	// when the ConditionalTTL is triggered.
 	Delete bool `json:"delete"`
 
-	// IncludeWhenEvaluating specifies whether this target group should be
+	// IncludeWhenEvaluating indicates whether this target group should be
 	// included in the CEL evaluation context.
 	IncludeWhenEvaluating bool `json:"includeWhenEvaluating"`
 
-	// Reference declares how to find either a single object, through its name,
-	// or a collection, through LabelSelectors.
+	// Reference declares how to find either a single object, using its name,
+	// or a collection, using a LabelSelector.
 	Reference TargetReference `json:"reference"`
 }
 
-// ConditionalTTLSpec defines the desired state of ConditionalTTL
+// ConditionalTTLSpec represents the configuration for a ConditionalTTL object.
+// A ConditionalTTL's specification is the union of conditions under which
+// deletion begins and actions to be taken during it.
 type ConditionalTTLSpec struct {
-	// TTL specifies the minimum duration the target objects will last
+	// Duration the controller should wait relative to the ConditionalTTL's CreationTime
+	// before starting deletion.
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Format=duration
 	TTL *metav1.Duration `json:"ttl"`
 
+	// Specifies how the controller should retry the evaluation of conditions.
+	// This field is required when the list of conditions is not empty.
 	// +optional
 	Retry *RetryConfig `json:"retry,omitempty"`
 
+	// Optional: Allows a ConditionalTTL to refer to and possibly delete a Helm release,
+	// usually the release responsible for creating the targets of the ConditionalTTL.
 	// +optional
 	Helm *HelmConfig `json:"helm,omitempty"`
 
+	// List of targets the ConditionalTTL is interested in deleting or that are needed
+	// for evaluating the conditions under which deletion should take place.
 	Targets []Target `json:"targets,omitempty"`
 
+	// Optional list of [Common Expression Language](https://github.com/google/cel-spec) conditions
+	// which should all evaluate to true before deletion takes place.
 	// +optional
 	Conditions []string `json:"conditions,omitempty"`
 
-	// TODO: validate https? protocol
+	// Optional http(s) address the controller should send a [Cloud Event](https://github.com/cloudevents/spec/blob/main/cloudevents/spec.md)
+	// to after deletion takes place.
 	// +optional
 	CloudEventSink *string `json:"cloudEventSink,omitempty"`
 }
 
 type TargetStatus struct {
-	// Name matches the declared name on Spec.Targets.
+	// Name is the target name as declared on `spec.targets`.
 	Name string `json:"name"`
 
+	// Delete matches `.spec.targets.delete` for the target
+	// identified by `name`.
 	Delete bool `json:"delete"`
 
+	// IncludeWhenEvaluating matches `.spec.targets.includeWhenEvaluating` for the target
+	// identified by `name`.
 	IncludeWhenEvaluating bool `json:"includeWhenEvaluating"`
 
 	// State is the observed state of the target on the cluster
@@ -117,7 +139,7 @@ type TargetStatus struct {
 	State *unstructured.Unstructured `json:"state,omitempty"`
 }
 
-// ConditionalTTLStatus defines the observed state of ConditionalTTL
+// ConditionalTTLStatus defines the observed state of ConditionalTTL.
 type ConditionalTTLStatus struct {
 	Targets []TargetStatus `json:"targets,omitempty"`
 
@@ -134,7 +156,12 @@ type ConditionalTTLStatus struct {
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:printcolumn:name="TTL",type=string,format=date-time,JSONPath=`.spec.ttl`
 // +kubebuilder:printcolumn:name="Status",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
-// ConditionalTTL is the Schema for the conditionalttls API
+
+// ConditionalTTL allows one to declare a set of conditions under which a set of
+// resources should be deleted.
+//
+// The ConditionalTTL's controller will track the statuses of its referenced Targets,
+// periodically re-evaluating the declared conditions for deletion.
 type ConditionalTTL struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -145,7 +172,7 @@ type ConditionalTTL struct {
 
 //+kubebuilder:object:root=true
 
-// ConditionalTTLList contains a list of ConditionalTTL
+// ConditionalTTLList contains a list of ConditionalTTL.
 type ConditionalTTLList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
