@@ -14,7 +14,7 @@ steps:
       event: tag
     settings:
       repo: cleaner-controller
-      registry: 558830342743.dkr.ecr.us-east-1.amazonaws.com
+      registry: public.ecr.aws/f8y0w2c4
       region: us-east-1
       dockerfile: Dockerfile
       create_repository: true
