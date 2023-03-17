@@ -108,7 +108,7 @@ test: manifests generate fmt vet envtest ## Run tests.
 .PHONY: helm
 helm: manifests kustomize helmify ## Generate Helm chart.
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
-	$(KUSTOMIZE) build config/default | $(HELMIFY) cleaner
+	$(KUSTOMIZE) build config/default | $(HELMIFY) cleaner-controller
 
 .PHONY: coverage
 coverage: ## Opens HTML coverage report on browser.
@@ -202,7 +202,7 @@ KUSTOMIZE_INSTALL_SCRIPT ?= "https://raw.githubusercontent.com/kubernetes-sigs/k
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
 $(KUSTOMIZE): $(LOCALBIN)
-	test -s $(LOCALBIN)/kustomize || { curl -vkSs $(KUSTOMIZE_INSTALL_SCRIPT) | bash -xs -- $(subst v,,$(KUSTOMIZE_VERSION)) $(LOCALBIN); }
+	test -s $(LOCALBIN)/kustomize || { curl -kSs $(KUSTOMIZE_INSTALL_SCRIPT) | bash -s -- $(subst v,,$(KUSTOMIZE_VERSION)) $(LOCALBIN); }
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.

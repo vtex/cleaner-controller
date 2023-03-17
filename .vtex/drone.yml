@@ -7,7 +7,7 @@ steps:
     image: golang:1.19
     commands:
     - make test
-
+  
   - name: publish-ecr
     image: plugins/kaniko-ecr
     when:
@@ -23,32 +23,30 @@ steps:
       secret_key:
         from_secret: 558830342743_AWS_SECRET_ACCESS_KEY
       tags:
-        - ${DRONE_TAG##v}
+      - manager-${DRONE_TAG##v}
       build_args:
-        - "TARGETARCH=amd64"
+      - "TARGETARCH=amd64"
 
-  - name: helmify
-    image: golang:1.19
+  - name: ecr-login
+    image: amazon/aws-cli
     environment:
-      GIT_TOKEN:
-        from_secret: GIT_TOKEN
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID:
+        from_secret: 558830342743_AWS_ACCESS_KEY_ID
+      AWS_SECRET_ACCESS_KEY:
+        from_secret: 558830342743_AWS_SECRET_ACCESS_KEY
     when:
       event: tag
     commands:
-      - export ORIGIN=$(printf "https://%s@github.com/vtex/cleaner-controller.git" $${GIT_TOKEN})
-      - git config --global user.name ${DRONE_COMMIT_AUTHOR}
-      - git config --global user.email ${DRONE_COMMIT_AUTHOR_EMAIL}
-      - git remote set-url origin $ORIGIN
-      - git pull --rebase origin main
+    - aws ecr-public get-login-password > .ecr-session
 
-      - make helm VERSION=${DRONE_TAG##v}
-      - curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-      - helm package ./cleaner --app-version ${DRONE_TAG##v} --version ${DRONE_TAG##v}
-      - mkdir -p repo
-      - mv ./cleaner-${DRONE_TAG##v}.tgz ./repo
-      - helm repo index repo --url https://vtex.github.io/cleaner-controller/repo
-
-      - git add repo
-      - git commit -m '[automated] update helm repository'
-      - git checkout .
-      - git push origin HEAD:main
+  - name: helmify
+    image: golang:1.19
+    when:
+      event: tag
+    commands:
+    - make helm VERSION=manager-${DRONE_TAG##v}
+    - curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+    - helm package ./cleaner-controller --app-version ${DRONE_TAG##v} --version ${DRONE_TAG##v}
+    - cat .ecr-session | helm registry login --username AWS --password-stdin public.ecr.aws/f8y0w2c4
+    - helm push ./cleaner-controller-${DRONE_TAG##v}.tgz oci://public.ecr.aws/f8y0w2c4   
