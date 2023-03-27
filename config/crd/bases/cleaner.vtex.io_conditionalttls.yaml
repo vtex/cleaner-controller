@@ -31,7 +31,10 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: ConditionalTTL is the Schema for the conditionalttls API
+        description: "ConditionalTTL allows one to declare a set of conditions under
+          which a set of resources should be deleted. \n The ConditionalTTL's controller
+          will track the statuses of its referenced Targets, periodically re-evaluating
+          the declared conditions for deletion."
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -46,30 +49,39 @@ spec:
           metadata:
             type: object
           spec:
-            description: ConditionalTTLSpec defines the desired state of ConditionalTTL
+            description: ConditionalTTLSpec represents the configuration for a ConditionalTTL
+              object. A ConditionalTTL's specification is the union of conditions
+              under which deletion begins and actions to be taken during it.
             properties:
               cloudEventSink:
-                description: 'TODO: validate https? protocol'
+                description: Optional http(s) address the controller should send a
+                  [Cloud Event](https://github.com/cloudevents/spec/blob/main/cloudevents/spec.md)
+                  to after deletion takes place.
                 type: string
               conditions:
+                description: Optional list of [Common Expression Language](https://github.com/google/cel-spec)
+                  conditions which should all evaluate to true before deletion takes
+                  place.
                 items:
                   type: string
                 type: array
               helm:
-                description: HelmConfig defines the helm release associated with the
-                  targetted resources and whether the release should be deleted.
+                description: 'Optional: Allows a ConditionalTTL to refer to and possibly
+                  delete a Helm release, usually the release responsible for creating
+                  the targets of the ConditionalTTL.'
                 properties:
                   delete:
                     description: Delete specifies whether the Helm release should
-                      be deleted whenever the ConditionalTTL is triggered.
+                      be deleted.
                     type: boolean
                   release:
-                    description: Release is the Helm release name.
+                    description: The Helm Release name.
                     type: string
                 type: object
               retry:
-                description: RetryConfig defines how the controller will retry the
-                  condition.
+                description: Specifies how the controller should retry the evaluation
+                  of conditions. This field is required when the list of conditions
+                  is not empty.
                 properties:
                   period:
                     description: Period defines how long the controller should wait
@@ -80,30 +92,32 @@ spec:
                 - period
                 type: object
               targets:
+                description: List of targets the ConditionalTTL is interested in deleting
+                  or that are needed for evaluating the conditions under which deletion
+                  should take place.
                 items:
                   description: Target declares how to find one or more resources related
-                    to the ConditionalTTL. Targets are watched in order to trigger
-                    a reevaluation of the conditions and, when the ConditionalTTl
-                    is triggered they might be deleted by the controller.
+                    to the ConditionalTTL, whether they should be deleted and whether
+                    they are necessary for evaluating the set of conditions.
                   properties:
                     delete:
-                      description: Delete specifies whether this target group should
+                      description: Delete indicates whether this target group should
                         be deleted when the ConditionalTTL is triggered.
                       type: boolean
                     includeWhenEvaluating:
-                      description: IncludeWhenEvaluating specifies whether this target
+                      description: IncludeWhenEvaluating indicates whether this target
                         group should be included in the CEL evaluation context.
                       type: boolean
                     name:
-                      description: Name identifies this target group and identifies
-                        the target current state when evaluating the CEL conditions.
+                      description: Name identifies this target group and is used to
+                        refer to its state when evaluating the set of conditions.
                         The name `time` is invalid and is included by default during
                         evaluation.
                       pattern: ^[^t].*|t($|[^i]).*|ti($|[^m]).*|tim($|[^e]).*|time.+
                       type: string
                     reference:
                       description: Reference declares how to find either a single
-                        object, through its name, or a collection, through LabelSelectors.
+                        object, using its name, or a collection, using a LabelSelector.
                       properties:
                         apiVersion:
                           description: 'APIVersion defines the versioned schema of
@@ -178,15 +192,15 @@ spec:
                   type: object
                 type: array
               ttl:
-                description: TTL specifies the minimum duration the target objects
-                  will last
+                description: Duration the controller should wait relative to the ConditionalTTL's
+                  CreationTime before starting deletion.
                 format: duration
                 type: string
             required:
             - ttl
             type: object
           status:
-            description: ConditionalTTLStatus defines the observed state of ConditionalTTL
+            description: ConditionalTTLStatus defines the observed state of ConditionalTTL.
             properties:
               conditions:
                 items:
@@ -265,11 +279,15 @@ spec:
                 items:
                   properties:
                     delete:
+                      description: Delete matches `.spec.targets.delete` for the target
+                        identified by `name`.
                       type: boolean
                     includeWhenEvaluating:
+                      description: IncludeWhenEvaluating matches `.spec.targets.includeWhenEvaluating`
+                        for the target identified by `name`.
                       type: boolean
                     name:
-                      description: Name matches the declared name on Spec.Targets.
+                      description: Name is the target name as declared on `spec.targets`.
                       type: string
                     state:
                       description: State is the observed state of the target on the
