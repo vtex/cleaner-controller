@@ -11,29 +11,32 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v3
+
       - name: configure aws credentials
         uses: aws-actions/configure-aws-credentials@v1
         with:
           role-to-assume: arn:aws:iam::558830342743:role/PublishCleanerController
           role-session-name: github-actions-from-cleaner-controller
           aws-region: us-east-1
+
       - name: Login to Amazon ECR Public
         id: login-ecr-public
         uses: aws-actions/amazon-ecr-login@v2
         with:
           registry-type: public
-      - run: |
+
+      - name: Build, tag, and push docker image to Amazon ECR Public
+        uses: int128/kaniko-action@v1
+        with:
+          push: true
+          tags: ${{ steps.login-ecr-public.outputs.registry }}/f8y0w2c4/cleaner-controller:${{ github.ref_name }}
+            
+      - name: Publish helm chart
+        run: |
           make helm VERSION=manager-${{ github.ref_name }}
           # latest v3.13.0 helm is bugged https://github.com/helm/helm/issues/12423
           curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash -s -- --version v3.12.3
           helm package ./cleaner-controller --app-version ${{ github.ref_name }} --version ${{ github.ref_name }}
-          helm package ./cleaner-controller --app-version v0.0.0 --version v0.0.0
-          helm push ./cleaner-controller-v0.0.0.tgz oci://public.ecr.aws/f8y0w2c4   
+          helm push ./cleaner-controller-${{ github.ref_name }}.tgz oci://public.ecr.aws/f8y0w2c4   
 
-    #      - name: Build, tag, and push docker image to Amazon ECR Public
-    #        uses: int128/kaniko-action@v1
-    #        with:
-    #          push: true
-    #          tags: ${{ steps.login-ecr-public.outputs.registry }}/f8y0w2c4/cleaner-controller:${{ github.ref_name }}
-    #
 
