@@ -25,6 +25,8 @@ jobs:
         with:
           registry-type: public
 
+      - uses: actions/setup-go@v4
+
       - name: Build, tag, and push docker image to Amazon ECR Public
         uses: int128/kaniko-action@v1
         with:
