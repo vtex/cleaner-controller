@@ -24,9 +24,11 @@ jobs:
           registry-type: public
       - run: |
           make helm VERSION=manager-${{ github.ref_name }}
-          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          # latest v3.13.0 helm is bugged https://github.com/helm/helm/issues/12423
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash -s -- --version v3.12.3
           helm package ./cleaner-controller --app-version ${{ github.ref_name }} --version ${{ github.ref_name }}
-          helm push ./cleaner-controller-${{ github.ref_name }}.tgz oci://public.ecr.aws/f8y0w2c4   
+          helm package ./cleaner-controller --app-version v0.0.0 --version v0.0.0
+          helm push ./cleaner-controller-v0.0.0.tgz oci://public.ecr.aws/f8y0w2c4   
 
     #      - name: Build, tag, and push docker image to Amazon ECR Public
     #        uses: int128/kaniko-action@v1
