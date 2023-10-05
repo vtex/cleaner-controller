@@ -22,10 +22,16 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
         with:
           registry-type: public
-      - name: Build, tag, and push docker image to Amazon ECR Public
-        uses: int128/kaniko-action@v1
-        with:
-          push: true
-          tags: ${{ steps.login-ecr-public.outputs.registry }}/f8y0w2c4/cleaner-controller:${{ github.ref_name }}
+      - run: |
+          make helm VERSION=manager-${{ github.ref_name }}
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          helm package ./cleaner-controller --app-version ${{ github.ref_name }} --version ${{ github.ref_name }}
+          helm push ./cleaner-controller-${{ github.ref_name }}.tgz oci://public.ecr.aws/f8y0w2c4   
 
+    #      - name: Build, tag, and push docker image to Amazon ECR Public
+    #        uses: int128/kaniko-action@v1
+    #        with:
+    #          push: true
+    #          tags: ${{ steps.login-ecr-public.outputs.registry }}/f8y0w2c4/cleaner-controller:${{ github.ref_name }}
+    #
 
