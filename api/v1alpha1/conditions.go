@@ -2,6 +2,7 @@ package v1alpha1
 
 const (
 	ConditionReasonNotExpired           = "NotExpired"
+	ConditionReasonKeepMinimumAmount    = "KeepMinimumAmount"
 	ConditionReasonTargetResolveError   = "TargetResolveError"
 	ConditionReasonEnvironmentError     = "ConditionEnvironmentError"
 	ConditionReasonCompileError         = "ConditionCompileError"

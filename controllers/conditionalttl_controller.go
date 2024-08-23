@@ -20,6 +20,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/go-logr/logr"
+	"strings"
 	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
@@ -118,6 +120,28 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{RequeueAfter: expiresAt.Sub(t)}, nil
 	}
 
+	exceedMinResources, err := r.exceedMinResources(log, cTTL)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if !exceedMinResources {
+		readyCondition := metav1.Condition{
+			Status:             metav1.ConditionUnknown,
+			Reason:             cleanerv1alpha1.ConditionReasonKeepMinimumAmount,
+			Message:            "Must keep a minimum amount of resources",
+			Type:               cleanerv1alpha1.ConditionTypeReady,
+			ObservedGeneration: cTTL.GetGeneration(),
+		}
+		apimeta.SetStatusCondition(&cTTL.Status.Conditions, readyCondition)
+		if err := r.Status().Update(ctx, cTTL); err != nil {
+			return ctrl.Result{}, err
+		}
+		// enqueue again using the same period of the retry
+		// we might discuss if a more flexible time is required
+		return ctrl.Result{RequeueAfter: cTTL.Spec.Retry.Period.Duration}, nil
+	}
+
 	ts, err := r.resolveTargets(ctx, cTTL)
 	if err != nil {
 		log.Error(err, "Failed to resolve target")
@@ -192,6 +216,74 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// exceedMinResources determines if the release should be kept by evaluating
+// the minimum resources limit and if it's one of the last N releases of the account
+func (r *ConditionalTTLReconciler) exceedMinResources(log logr.Logger, cTTL *cleanerv1alpha1.ConditionalTTL) (bool, error) {
+	// init helm config (this might be improved)
+	cfg := new(action.Configuration)
+	err := cfg.Init(r.clientForNamespace(cTTL.ObjectMeta.Namespace), cTTL.ObjectMeta.Namespace, "secret", func(format string, args ...interface{}) {
+		log.V(1).Info(fmt.Sprintf(format, args...))
+	})
+	if err != nil {
+		r.Recorder.Eventf(cTTL, corev1.EventTypeWarning, "HelmSetupFailed", "Error initializing Helm client: %s", err.Error())
+		return false, err
+	}
+
+	// assumes that the release name will be in the pattern sfj-$COMMIT--...$DEPLOYMENT
+	// meaning that after splitting by -- will have: "sfj-$COMMIT" (index 0) and "...-$DEPLOYMENT" (index 1)
+	releaseSplit := strings.Split(cTTL.Spec.Helm.Release, "--")
+	deployment := releaseSplit[len(releaseSplit)-1]
+
+	// assuming that we'll always have sfj-$COMMIT-... (meaning commit will be always the second element here)
+	currReleaseCommit := strings.Split(releaseSplit[0], "-")[1]
+
+	list := action.NewList(cfg)
+	list.Filter = deployment
+	rls, err := list.Run()
+	if err != nil {
+		log.Error(err, "error trying to list releases")
+		return false, err
+	}
+
+	// check if current release is still in list
+	var releaseFound = false
+	for _, rl := range rls {
+		if rl.Name == cTTL.Spec.Helm.Release {
+			releaseFound = true
+			break
+		}
+	}
+
+	if !releaseFound {
+		// if release is not found anymore, consider that it can be removed
+		return true, nil
+	}
+
+	// for POC purposes, we're defining a hard limit of 2 releases, but this limit can be added to the cleaner spec to be configurable by account
+	if len(rls) <= 2 {
+		// if we already have less than min amount, then do not delete release
+		return false, nil
+	}
+
+	// we're "mocking" GitHub here for POC purposes, the following list should be a list of the last N (here 2) releases/commits
+	lastReleasesInGit := []string{"8a28053", "xx28053"}
+	var mustKeepRelease = false
+	for _, releaseCommit := range lastReleasesInGit {
+		if releaseCommit == currReleaseCommit {
+			mustKeepRelease = true
+			break
+		}
+	}
+
+	if mustKeepRelease {
+		// if we found the release in last N commits in Git, then we must keep the release
+		return false, nil
+	}
+
+	// if we do not found the release in last N commits, we can delete it
+	return true, nil
 }
 
 // resolveTarget resolves either a single target given its name or a List kind
