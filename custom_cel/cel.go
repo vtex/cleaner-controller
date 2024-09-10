@@ -10,11 +10,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// todo: add golang doc
-func getWrapperName(name string) string {
-	return fmt.Sprintf("%s_wrapper", name)
-}
-
 // BuildCELOptions builds the list of env options to be used when
 // building the CEL environment used to evaluated the conditions
 // of a given cTTL.
@@ -26,7 +21,7 @@ func BuildCELOptions(cTTL *cleanerv1alpha1.ConditionalTTL) []cel.EnvOption {
 	}
 	for _, t := range cTTL.Spec.Targets {
 		if t.IncludeWhenEvaluating {
-			r = append(r, cel.Variable(t.Name, cel.DynType), cel.Variable(getWrapperName(t.Name), cel.DynType))
+			r = append(r, cel.Variable(t.Name, cel.DynType))
 		}
 	}
 	return r
@@ -41,7 +36,6 @@ func BuildCELContext(targets []cleanerv1alpha1.TargetStatus, time time.Time) map
 			continue
 		}
 		ctx[ts.Name] = ts.State.UnstructuredContent()
-		ctx[getWrapperName(ts.Name)] = ts.State
 	}
 	ctx["time"] = time
 	return ctx

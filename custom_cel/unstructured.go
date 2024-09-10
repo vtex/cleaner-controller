@@ -1,6 +1,5 @@
 package custom_cel
 
-// todo: add golang docs
 import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
@@ -17,12 +16,69 @@ const (
 	DescendingOrder = "desc"
 )
 
+// Unstructured returns a cel.EnvOption to configure extended functions for Unstructured manipulation.
+// # SortUnstructured
+//
+// Returns a new list ordered by the creation timestamp field.
+//
+// sort(<list>, "order") -> <list>
+//
+// Examples:
+//
+// Input 1:
+//
+// sort({[
+//
+//	{map[metadata:map[creationTimestamp:2024-09-08T09:17:17.527033-03:00]]},
+//	{map[metadata:map[creationTimestamp:2024-09-09T09:17:17.527033-03:00]]},
+//
+// ], "desc"}
+//
+// Output 1:
+//
+// {[
+//
+//	{map[metadata:map[creationTimestamp:2024-09-09T09:17:17.527033-03:00]]},
+//	{map[metadata:map[creationTimestamp:2024-09-08T09:17:17.527033-03:00]]},
+//
+// ]}
+//
+// Input 2:
+//
+// sort({[
+//
+//	{map[metadata:map[creationTimestamp:2024-09-09T09:17:17.527033-03:00]]},
+//	{map[metadata:map[creationTimestamp:2024-09-08T09:17:17.527033-03:00]]},
+//
+// ], "asc"}
+//
+// Output 2:
+//
+// {[
+//
+//	{map[metadata:map[creationTimestamp:2024-09-08T09:17:17.527033-03:00]]},
+//	{map[metadata:map[creationTimestamp:2024-09-09T09:17:17.527033-03:00]]},
+//
+// ]}
+//
+// Input 3:
+//
+// sort({[
+//
+//	{map[metadata:map[creationTimestamp:2024-09-09T09:17:17.527033-03:00]]},
+//	{map[metadata:map[creationTimestamp:2024-09-08T09:17:17.527033-03:00]]},
+//
+// ], "unknown-order"}
+//
+// Output 3:
+// error
 func Unstructured() cel.EnvOption {
 	return cel.Lib(unstructuredLib{})
 }
 
 type unstructuredLib struct{}
 
+// CompileOptions implements the Library interface method defining the basic compile configuration
 func (u unstructuredLib) CompileOptions() []cel.EnvOption {
 	dynListType := cel.ListType(cel.DynType)
 	return []cel.EnvOption{
@@ -39,6 +95,7 @@ func (u unstructuredLib) CompileOptions() []cel.EnvOption {
 	}
 }
 
+// ProgramOptions implements the Library interface method defining the basic program options
 func (u unstructuredLib) ProgramOptions() []cel.ProgramOption {
 	return []cel.ProgramOption{}
 }

@@ -10,7 +10,7 @@ import (
 )
 
 func Test_sortUnstructured(t *testing.T) {
-	varName := "objects_wrapper"
+	varName := "objects"
 
 	now := time.Now()
 	first := now.Add(-(time.Duration(24) * time.Hour * 3)).Format(time.RFC3339Nano)
@@ -23,13 +23,13 @@ func Test_sortUnstructured(t *testing.T) {
 		wantUlDyn ref.Val
 	}{
 		"sort unstructured in descending order": {
-			condition: `sort(objects_wrapper.items, "desc")`,
+			condition: `sort(objects.items, "desc")`,
 			ul:        generateUnorderedUl(t, first, second, third),
 			wantUlDyn: types.NewDynamicList(types.DefaultTypeAdapter, generateOrderedSlice(t, third, second, first)),
 		},
 
 		"sort unstructured in ascending order": {
-			condition: `sort(objects_wrapper.items, "asc")`,
+			condition: `sort(objects.items, "asc")`,
 			ul:        generateUnorderedUl(t, first, second, third),
 			wantUlDyn: types.NewDynamicList(types.DefaultTypeAdapter, generateOrderedSlice(t, first, second, third)),
 		},
@@ -37,23 +37,7 @@ func Test_sortUnstructured(t *testing.T) {
 
 	for description, tc := range testCases {
 		t.Run(description, func(t *testing.T) {
-			env, err := cel.NewEnv(
-				cel.Variable(varName, cel.DynType),
-				Unstructured(),
-			)
-			if err != nil {
-				t.Fatalf("unable to create new env: %s", err)
-			}
-
-			ast, issues := env.Compile(tc.condition)
-			if issues != nil && issues.Err() != nil {
-				t.Fatalf("compile error: %s", issues.Err())
-			}
-
-			prg, err := env.Program(ast)
-			if err != nil {
-				t.Fatalf("program error: %s", err)
-			}
+			prg := setupProgram(t, varName, tc.condition)
 
 			gotUlDyn, _, gotErr := prg.Eval(map[string]interface{}{
 				varName: tc.ul,
@@ -68,6 +52,28 @@ func Test_sortUnstructured(t *testing.T) {
 			}
 		})
 	}
+}
+
+func setupProgram(t *testing.T, varName string, condition string) cel.Program {
+	env, err := cel.NewEnv(
+		cel.Variable(varName, cel.DynType),
+		Unstructured(),
+	)
+	if err != nil {
+		t.Fatalf("unable to create new env: %s", err)
+	}
+
+	ast, issues := env.Compile(condition)
+	if issues != nil && issues.Err() != nil {
+		t.Fatalf("compile error: %s", issues.Err())
+	}
+
+	prg, err := env.Program(ast)
+	if err != nil {
+		t.Fatalf("program error: %s", err)
+	}
+
+	return prg
 }
 
 func generateUnorderedUl(t *testing.T, first, second, third string) map[string]interface{} {
@@ -101,6 +107,7 @@ func generateUnorderedUl(t *testing.T, first, second, third string) map[string]i
 	ul := &unstructured.UnstructuredList{
 		Items: items,
 	}
+
 	return ul.UnstructuredContent()
 }
 
