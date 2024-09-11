@@ -1,0 +1,5 @@
+values:
+  - name: foo
+    rank: 4
+  - name: bar
+    rank: 2
