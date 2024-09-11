@@ -15,8 +15,8 @@ import (
 // of a given cTTL.
 func BuildCELOptions(cTTL *cleanerv1alpha1.ConditionalTTL) []cel.EnvOption {
 	r := []cel.EnvOption{
-		ext.Strings(),  // helper string functions
-		Unstructured(), // helper unstructured functions
+		ext.Strings(), // helper string functions
+		Lists(),       // custom VTEX helper for list functions
 		cel.Variable("time", cel.TimestampType),
 	}
 	for _, t := range cTTL.Spec.Targets {
