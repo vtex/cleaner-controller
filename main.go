@@ -8,10 +8,14 @@ import (
 	"strings"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common"
+	"github.com/google/cel-go/common/ast"
+	"github.com/google/cel-go/common/operators"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
 	"github.com/google/cel-go/ext"
+	"github.com/google/cel-go/parser"
 	"sigs.k8s.io/yaml"
 )
 
@@ -19,6 +23,55 @@ const (
 	AscendingOrder  = "asc"
 	DescendingOrder = "desc"
 )
+
+func extractIdent(e ast.Expr) (string, bool) {
+	switch e.Kind() {
+	case ast.IdentKind:
+		return e.AsIdent(), true
+	}
+	return "", false
+}
+
+func MakeSortBy(eh parser.ExprHelper, target ast.Expr, args []ast.Expr) (ast.Expr, *common.Error) {
+	v, found := extractIdent(args[0])
+	if !found {
+		return nil, eh.NewError(args[0].ID(), "argument is not an identifier")
+	}
+
+	var fn ast.Expr = args[1]
+
+	init := eh.NewList()
+	condition := eh.NewLiteral(types.True)
+
+	step := eh.NewCall(operators.Add, eh.NewAccuIdent(), eh.NewList(
+		eh.NewCall("pair", fn, args[0]),
+	))
+
+	/*
+	   This comprehension is expanded to:
+	   __result__ = [] # init expr
+	   for $v in $target:
+	       __result__ += [pair(fn(v), v)] # step expr
+	   return sort(__result__, "asc") # result expr
+	*/
+	mapped := eh.NewComprehension(
+		target,
+		v,
+		parser.AccumulatorName,
+		init,
+		condition,
+		step,
+		eh.NewCall(
+			"sort",
+			eh.NewAccuIdent(),
+			eh.NewLiteral(types.DefaultTypeAdapter.NativeToValue("asc")),
+		),
+	)
+
+	return mapped, nil
+}
+
+var sortByMacro = parser.NewReceiverMacro("sort_by", 2, MakeSortBy)
 
 func main() {
 	if len(os.Args) != 2 {
@@ -32,6 +85,7 @@ func main() {
 	dynListType := cel.ListType(cel.DynType)
 	env, err := cel.NewEnv(
 		ext.Strings(),
+		cel.Macros(sortByMacro),
 		cel.Function(
 			"pair",
 			cel.Overload(

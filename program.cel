@@ -1,1 +1,1 @@
-sort(values.map(v, pair(v.rank, v)), "asc")
+values.sort_by(v, v.rank)
