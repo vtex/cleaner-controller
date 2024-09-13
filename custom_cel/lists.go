@@ -8,33 +8,38 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
-	"github.com/google/cel-go/ext"
 	"github.com/google/cel-go/parser"
 	"k8s.io/apiserver/pkg/cel/library"
 	"sort"
-	"strings"
-)
-
-const (
-	AscendingOrder  = "asc"
-	DescendingOrder = "desc"
 )
 
 // Lists returns a cel.EnvOption to configure extended functions Lists manipulation.
+//
 // # SortBy
 //
-// Returns a new sorted list by the field and order defined (ascending or descending).
+// Returns a new sorted list by the field defined.
 // It supports all types that implements the base traits.Comparer interface.
 //
-// <list>.sort_by(obj, obj.field) -> <list>
+// <list>.sort_by(obj, obj.field) ==> <list>
 //
 // Examples:
 //
-// [3,1,2].sort_by(i, i) // returns [1,2,3]
+// [2,3,1].sort_by(i,i) ==> [1,2,3]
 //
-// [3,1,2].sort_by(i, i, "desc") // returns [3,2,1]
+// [{Name: "c", Age: 10}, {Name: "a", Age: 30}, {Name: "b", Age: 1}].sort_by(obj, obj.age) ==> [{Name: "b", Age: 1}, {Name: "c", Age: 10}, {Name: "a", Age: 30}]
 //
-// [{Name: "c", Age: 10}, {Name: "a", Age: 30}, {Name: "b", Age: 1}].sort_by(obj, obj.age) // returns [{Name: "b", Age: 1}, {Name: "c", Age: 10}, {Name: "a", Age: 30}]
+// # ReverseList
+//
+// Returns a new list in reverse order.
+// It supports all types that implements the base traits.Comparer interface
+//
+// <list>.reverse_list() ==> <list>
+//
+// # Examples
+//
+// [1,2,3].reverse_list() ==> [3,2,1]
+//
+// ["x", "y", "z"].reverse_list() ==> ["z", "y", "x"]
 func Lists() cel.EnvOption {
 	return cel.Lib(listsLib{})
 }
@@ -45,12 +50,9 @@ type listsLib struct{}
 func (u listsLib) CompileOptions() []cel.EnvOption {
 	dynListType := cel.ListType(cel.DynType)
 	sortByMacro := parser.NewReceiverMacro("sort_by", 2, makeSortBy)
-	sortByMacroWithOrder := parser.NewReceiverMacro("sort_by", 3, makeSortBy)
 	return []cel.EnvOption{
-		ext.Strings(),
 		library.Lists(),
 		cel.Macros(sortByMacro),
-		cel.Macros(sortByMacroWithOrder),
 		cel.Function(
 			"pair",
 			cel.Overload(
@@ -63,10 +65,19 @@ func (u listsLib) CompileOptions() []cel.EnvOption {
 		cel.Function(
 			"sort",
 			cel.Overload(
-				"sort_by_order",
-				[]*cel.Type{dynListType, cel.DynType},
+				"sort_list",
+				[]*cel.Type{dynListType},
 				dynListType,
-				cel.BinaryBinding(sortByOrder),
+				cel.UnaryBinding(makeSort),
+			),
+		),
+		cel.Function(
+			"reverse_list",
+			cel.MemberOverload(
+				"reverse_list_id",
+				[]*cel.Type{cel.ListType(cel.DynType)},
+				cel.ListType(cel.DynType),
+				cel.UnaryBinding(makeReverse),
 			),
 		),
 	}
@@ -97,15 +108,10 @@ func makePair(order ref.Val, value ref.Val) ref.Val {
 	})
 }
 
-func sortByOrder(itemsVal ref.Val, orderVal ref.Val) ref.Val {
+func makeSort(itemsVal ref.Val) ref.Val {
 	items, ok := itemsVal.(traits.Lister)
 	if !ok {
 		return types.ValOrErr(itemsVal, "unable to convert to traits.Lister")
-	}
-
-	order, ok := orderVal.Value().(string)
-	if !ok {
-		return types.ValOrErr(orderVal, "unable to convert to ref.Val string")
 	}
 
 	pairs := make([]pair, 0, items.Size().Value().(int64))
@@ -123,38 +129,9 @@ func sortByOrder(itemsVal ref.Val, orderVal ref.Val) ref.Val {
 		index++
 	}
 
-	ascSort := func(i, j int) bool {
-		cmp := pairs[i].order.(traits.Comparer)
-		switch cmp.Compare(pairs[j].order) {
-		case types.IntNegOne:
-			return true
-		case types.IntOne:
-			return false
-		default: // IntZero means equal
-			return false
-		}
-	}
-
-	descSort := func(i, j int) bool {
-		cmp := pairs[i].order.(traits.Comparer)
-		switch cmp.Compare(pairs[j].order) {
-		case types.IntNegOne:
-			return false
-		case types.IntOne:
-			return true
-		default: // IntZero means equal
-			return false
-		}
-	}
-
-	switch strings.ToLower(order) {
-	case AscendingOrder:
-		sort.Slice(pairs, ascSort)
-	case DescendingOrder:
-		sort.Slice(pairs, descSort)
-	default:
-		return types.NewErr("unknown order: %s", order)
-	}
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].order.(traits.Comparer).Compare(pairs[j].order) == types.IntNegOne
+	})
 
 	var ordered []interface{}
 	for _, v := range pairs {
@@ -169,13 +146,6 @@ func extractIdent(e ast.Expr) (string, bool) {
 		return e.AsIdent(), true
 	}
 	return "", false
-}
-
-func extractOrder(args []ast.Expr) ref.Val {
-	if len(args) == 3 {
-		return args[2].AsLiteral()
-	}
-	return types.String("asc")
 }
 
 func makeSortBy(eh parser.ExprHelper, target ast.Expr, args []ast.Expr) (ast.Expr, *common.Error) {
@@ -193,14 +163,12 @@ func makeSortBy(eh parser.ExprHelper, target ast.Expr, args []ast.Expr) (ast.Exp
 		eh.NewCall("pair", fn, args[0]),
 	))
 
-	order := extractOrder(args)
-
 	/*
 	   This comprehension is expanded to:
 	   __result__ = [] # init expr
 	   for $v in $target:
 	       __result__ += [pair(fn(v), v)] # step expr
-	   return sort(__result__, "asc") # result expr
+	   return sort(__result__) # result expr
 	*/
 	mapped := eh.NewComprehension(
 		target,
@@ -212,9 +180,27 @@ func makeSortBy(eh parser.ExprHelper, target ast.Expr, args []ast.Expr) (ast.Exp
 		eh.NewCall(
 			"sort",
 			eh.NewAccuIdent(),
-			eh.NewLiteral(types.DefaultTypeAdapter.NativeToValue(order)),
 		),
 	)
 
 	return mapped, nil
+}
+
+func makeReverse(itemsVal ref.Val) ref.Val {
+	items, ok := itemsVal.(traits.Lister)
+	if !ok {
+		return types.ValOrErr(itemsVal, "unable to convert to traits.Lister")
+	}
+
+	orderedItems := make([]ref.Val, 0, items.Size().Value().(int64))
+	for it := items.Iterator(); it.HasNext().(types.Bool); {
+		orderedItems = append(orderedItems, it.Next())
+	}
+
+	for i := len(orderedItems)/2 - 1; i >= 0; i-- {
+		opp := len(orderedItems) - 1 - i
+		orderedItems[i], orderedItems[opp] = orderedItems[opp], orderedItems[i]
+	}
+
+	return types.NewDynamicList(types.DefaultTypeAdapter, orderedItems)
 }
