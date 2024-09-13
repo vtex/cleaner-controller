@@ -84,23 +84,7 @@ func Test_sort(t *testing.T) {
 		},
 	}
 
-	for description, tc := range testCases {
-		t.Run(description, func(t *testing.T) {
-			prg := setupProgram(t, varName, tc.condition)
-
-			gotList, _, gotErr := prg.Eval(map[string]interface{}{
-				varName: tc.list,
-			})
-
-			if gotErr != nil {
-				t.Fatalf("eval error: %s", gotErr)
-			}
-
-			if gotList.Equal(tc.wantList) != types.True {
-				t.Errorf("\ngot=%v\nwant=%v", gotList, tc.wantList)
-			}
-		})
-	}
+	evaluateTestCases(t, testCases)
 }
 
 func Test_reverse(t *testing.T) {
@@ -170,6 +154,14 @@ func Test_reverse(t *testing.T) {
 		},
 	}
 
+	evaluateTestCases(t, testCases)
+}
+
+func evaluateTestCases(t *testing.T, testCases map[string]struct {
+	condition string
+	list      any
+	wantList  ref.Val
+}) {
 	for description, tc := range testCases {
 		t.Run(description, func(t *testing.T) {
 			prg := setupProgram(t, varName, tc.condition)
