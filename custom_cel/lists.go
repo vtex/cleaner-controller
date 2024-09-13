@@ -10,6 +10,7 @@ import (
 	"github.com/google/cel-go/common/types/traits"
 	"github.com/google/cel-go/parser"
 	"k8s.io/apiserver/pkg/cel/library"
+	"slices"
 	"sort"
 )
 
@@ -197,10 +198,7 @@ func makeReverse(itemsVal ref.Val) ref.Val {
 		orderedItems = append(orderedItems, it.Next())
 	}
 
-	for i := len(orderedItems)/2 - 1; i >= 0; i-- {
-		opp := len(orderedItems) - 1 - i
-		orderedItems[i], orderedItems[opp] = orderedItems[opp], orderedItems[i]
-	}
+	slices.Reverse(orderedItems)
 
 	return types.NewDynamicList(types.DefaultTypeAdapter, orderedItems)
 }
