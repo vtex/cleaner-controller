@@ -1,4 +1,4 @@
-package controllers
+package custom_cel
 
 import (
 	"fmt"
@@ -10,12 +10,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// buildCELOptions builds the list of env options to be used when
+// BuildCELOptions builds the list of env options to be used when
 // building the CEL environment used to evaluated the conditions
 // of a given cTTL.
-func buildCELOptions(cTTL *cleanerv1alpha1.ConditionalTTL) []cel.EnvOption {
+func BuildCELOptions(cTTL *cleanerv1alpha1.ConditionalTTL) []cel.EnvOption {
 	r := []cel.EnvOption{
-		ext.Strings(), // helper string functions
+		ext.Strings(),  // helper string functions
+		ext.Bindings(), // helper binding functions
+		Lists(),        // custom VTEX helper for list functions
 		cel.Variable("time", cel.TimestampType),
 	}
 	for _, t := range cTTL.Spec.Targets {
@@ -26,9 +28,9 @@ func buildCELOptions(cTTL *cleanerv1alpha1.ConditionalTTL) []cel.EnvOption {
 	return r
 }
 
-// buildCELContext builds the map of parameters to be passed to the CEL
+// BuildCELContext builds the map of parameters to be passed to the CEL
 // evaluation given a list of TargetStatus and an evaluation time.
-func buildCELContext(targets []cleanerv1alpha1.TargetStatus, time time.Time) map[string]interface{} {
+func BuildCELContext(targets []cleanerv1alpha1.TargetStatus, time time.Time) map[string]interface{} {
 	ctx := make(map[string]interface{})
 	for _, ts := range targets {
 		if !ts.IncludeWhenEvaluating {
@@ -40,12 +42,12 @@ func buildCELContext(targets []cleanerv1alpha1.TargetStatus, time time.Time) map
 	return ctx
 }
 
-// evaluateCELConditions compiles and evaluates all the conditions on the passed CEL context,
+// EvaluateCELConditions compiles and evaluates all the conditions on the passed CEL context,
 // returning true only when all conditions evaluate to true. It stops evaluating on the first
 // encountered error but otherwise all conditions are evaluated in order to find and report
 // compilation and/or evaluation errors early. It also updates the passed
 // readyCondition Status, Type, Reason and Message fields.
-func evaluateCELConditions(opts []cel.EnvOption, celCtx map[string]interface{}, conditions []string, readyCondition *metav1.Condition) (conditionsMet bool, retryable bool) {
+func EvaluateCELConditions(opts []cel.EnvOption, celCtx map[string]interface{}, conditions []string, readyCondition *metav1.Condition) (conditionsMet bool, retryable bool) {
 	readyCondition.Status = metav1.ConditionFalse
 	readyCondition.Type = cleanerv1alpha1.ConditionTypeReady
 	env, err := cel.NewEnv(opts...)

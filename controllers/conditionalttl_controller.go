@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/vtex/cleaner-controller/custom_cel"
 	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
@@ -138,13 +139,13 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
-	celCtx := buildCELContext(ts, t)
-	celOpts := buildCELOptions(cTTL)
+	celCtx := custom_cel.BuildCELContext(ts, t)
+	celOpts := custom_cel.BuildCELOptions(cTTL)
 
 	readyCondition := metav1.Condition{
 		ObservedGeneration: cTTL.GetGeneration(),
 	}
-	condsMet, retryable := evaluateCELConditions(celOpts, celCtx, cTTL.Spec.Conditions, &readyCondition)
+	condsMet, retryable := custom_cel.EvaluateCELConditions(celOpts, celCtx, cTTL.Spec.Conditions, &readyCondition)
 	apimeta.SetStatusCondition(&cTTL.Status.Conditions, readyCondition)
 
 	if !condsMet {
