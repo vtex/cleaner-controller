@@ -20,8 +20,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/vtex/cleaner-controller/custom_cel"
+	"strings"
 	"time"
+
+	"github.com/vtex/cleaner-controller/custom_cel"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"helm.sh/helm/v3/pkg/action"
@@ -199,7 +201,12 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 // given a labelSelector.
 func (r *ConditionalTTLReconciler) resolveTarget(ctx context.Context, namespace string, t *cleanerv1alpha1.Target) (runtime.Unstructured, error) {
 	log := log.FromContext(ctx)
-	gvk := schema.FromAPIVersionAndKind(t.Reference.APIVersion, t.Reference.Kind)
+	gvk := schema.FromAPIVersionAndKind(
+		t.Reference.APIVersion,
+		// TODO: don't hack the correct kind case here, instead use the correct
+		// name in our cTTLs: revision -> Revision, service -> Service
+		strings.ToUpper(t.Reference.Kind[0:1])+t.Reference.Kind[1:],
+	)
 	if t.Reference.Name != nil {
 		u := &unstructured.Unstructured{}
 		u.SetGroupVersionKind(gvk)
