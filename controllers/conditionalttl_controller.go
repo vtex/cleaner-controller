@@ -203,6 +203,8 @@ func (r *ConditionalTTLReconciler) resolveTarget(ctx context.Context, namespace 
 	log := log.FromContext(ctx)
 	gvk := schema.FromAPIVersionAndKind(
 		t.Reference.APIVersion,
+		// TODO: don't hack the correct kind case here, instead use the correct
+		// name in our cTTLs: revision -> Revision, service -> Service
 		strings.ToUpper(t.Reference.Kind[0:1])+t.Reference.Kind[1:],
 	)
 	if t.Reference.Name != nil {
