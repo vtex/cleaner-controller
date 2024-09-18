@@ -33,7 +33,7 @@ jobs:
         uses: int128/kaniko-action@v1
         with:
           push: true
-          tags: ${{ steps.login-ecr-public.outputs.registry }}/f8y0w2c4/cleaner-controller:${{ github.ref_name }}
+          tags: ${{ steps.login-ecr-public.outputs.registry }}/f8y0w2c4/cleaner-controller:manager-${{ github.ref_name }}
             
       - name: Publish helm chart
         run: |
