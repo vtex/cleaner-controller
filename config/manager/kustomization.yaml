@@ -1,5 +1,5 @@
 resources:
 - manager.yaml
 commonLabels:
-  journey: '{{ .Values.opensearch.journey | default "not-configured" }}}'
-  search_index: '{{ .Values.opensearch.search_index | default "not-configured" }}}'
+  journey: '{{ .Values.opensearch.journey | default "not-configured" }}'
+  search_index: '{{ .Values.opensearch.search_index | default "not-configured" }}'
