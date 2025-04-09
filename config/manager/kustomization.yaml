@@ -1,2 +1,31 @@
 resources:
 - manager.yaml
+- config.yaml
+
+replacements:
+- source:
+    fieldPath: data.journey
+    kind: ConfigMap
+    name: cleaner-controller-logs-config
+  targets:
+  - fieldPaths:
+    - spec.template.metadata.labels.journey
+    select:
+      kind: Deployment
+      name: controller-manager
+- source:
+    fieldPath: data.search_index
+    kind: ConfigMap
+    name: cleaner-controller-logs-config
+  targets:
+  - fieldPaths:
+    - spec.template.metadata.labels.search_index
+    select:
+      kind: Deployment
+      name: controller-manager
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+images:
+- name: controller
+  newName: public.ecr.aws/f8y0w2c4/cleaner-controller
+  newTag: manager-local-v0.2.0-beta.3
