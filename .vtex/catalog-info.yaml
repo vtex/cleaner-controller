@@ -1,0 +1,19 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: homebrew-cleaner-controller
+  description: This component is responsible for deleting unused releases in Homebrew
+  tags:
+    - golang
+  annotations:
+    vtex.com/janus-acronym: ""
+    vtex.com/o11y-os-index: ""
+    grafana/dashboard-selector: ""
+    github.com/project-slug: vtex/cleaner-controller
+    backstage.io/techdocs-ref: dir:../
+    vtex.com/application-id: P3GP3T0Q
+spec:
+  lifecycle: production
+  owner: te-0014
+  type: infrastructure
+  dependsOn: []
