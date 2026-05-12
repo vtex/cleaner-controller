@@ -24,3 +24,22 @@ Dockerfile.cross
 *.swp
 *.swo
 *~
+
+# Spec Kit - regeneratable boilerplate
+.specify/scripts/
+.specify/extensions/
+.specify/extensions.yml
+.specify/init-options.json
+.specify/integration.json
+.specify/integrations/
+.specify/workflows/
+.specify/templates/plan-template.md
+.specify/templates/spec-template.md
+.specify/templates/tasks-template.md
+.specify/templates/checklist-template.md
+.specify/templates/constitution-template.md
+
+# Keep these (authored content):
+# .specify/memory/
+# .specify/specs/
+# .specify/templates/overrides/
