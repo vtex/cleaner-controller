@@ -25,6 +25,11 @@ Dockerfile.cross
 *.swo
 *~
 
+# Spec Kit skills - regeneratable boilerplate
+.agents/skills/speckit-*/
+.github/agents/speckit*
+.github/prompts/speckit*
+
 # Spec Kit - regeneratable boilerplate
 .specify/scripts/
 .specify/extensions/
