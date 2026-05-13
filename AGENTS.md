@@ -1,159 +1,69 @@
-# Cleaner Controller — Agent Context
+# AGENTS.md — cleaner-controller
 
 ## Project Overview
 
-**cleaner-controller** is a Kubernetes operator (built with [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime) / kubebuilder) that manages resource lifecycle through a custom `ConditionalTTL` CRD.
+cleaner-controller is a Kubernetes operator (controller-runtime / kubebuilder) that manages resource lifecycle via the `ConditionalTTL` CRD. A `ConditionalTTL` waits for a TTL to expire, evaluates optional CEL conditions, then deletes targets, uninstalls a Helm release, and/or sends a CloudEvent.
 
-A `ConditionalTTL` (short name: `cttl`) declares:
-- A **TTL** — wait time after creation before deletion is attempted
-- A set of **Targets** — Kubernetes resources to delete or observe
-- Optional **CEL conditions** that must all be true before deletion proceeds
-- Optional **Helm release** to uninstall on deletion
-- Optional **CloudEvent sink** to notify after deletion
+Tech stack: Go 1.22, controller-runtime v0.19.0, kubebuilder envtest, Ginkgo v2 + Gomega.  
+Module: `github.com/vtex/cleaner-controller` | Image: `public.ecr.aws/f8y0w2c4/cleaner-controller`
 
-Module: `github.com/vtex/cleaner-controller`  
-Go version: `1.22`  
-Image registry: `public.ecr.aws/f8y0w2c4/cleaner-controller`
+## Prerequisites
 
----
+- kubeconfig context only for `make run` / `make install` — tests need no cluster
+- envtest assets are downloaded automatically on first `make test`
 
-## Repository Layout
-
-```
-api/v1alpha1/               CRD types (ConditionalTTL, TargetReference, HelmConfig, RetryConfig)
-controllers/                Reconciler (ConditionalTTLReconciler) + suite_test.go
-custom_cel/                 CEL helpers — BuildCELOptions, BuildCELContext, EvaluateCELConditions
-config/
-  crd/                      Generated CRD manifests
-  rbac/                     RBAC roles and bindings
-  manager/                  Controller Deployment manifest
-  default/                  Kustomize overlay for full deploy
-  samples/                  Example ConditionalTTL resources
-docs/api-reference.md       Auto-generated API reference (make gen-docs)
-main.go                     Controller entry point
-Makefile                    Build, test, and deploy automation
-```
-
----
-
-## Core CRD: ConditionalTTL
-
-Group/Version: `cleaner.vtex.io/v1alpha1`  
-Kind: `ConditionalTTL` (short name: `cttl`)
-
-### Spec fields
-
-| Field | Type | Description |
-|---|---|---|
-| `ttl` | duration string | Wait after creation before deletion begins |
-| `retry.period` | duration string | How often to re-evaluate CEL conditions |
-| `targets[]` | Target | Resources to delete or observe |
-| `conditions[]` | string | CEL expressions — all must evaluate to `true` |
-| `helm.release` | string | Helm release name to uninstall |
-| `helm.delete` | bool | Whether to uninstall the Helm release |
-| `cloudEventSink` | string URL | HTTP(S) endpoint to receive a CloudEvent after deletion |
-
-### Target fields
-
-| Field | Description |
-|---|---|
-| `name` | Identifier used as CEL variable name. `time` is reserved and invalid. |
-| `delete` | If true, the resource is deleted when the TTL fires |
-| `includeWhenEvaluating` | If true, the resource's state is available in CEL as `name` |
-| `reference.apiVersion` + `reference.kind` | GVK to look up |
-| `reference.name` | Targets a single resource by name |
-| `reference.labelSelector` | Targets a collection of resources |
-
-The built-in CEL variable `time` (timestamp) is always injected and holds the current evaluation time.
-
----
-
-## Reconciler Flow
-
-File: `controllers/conditionalttl_controller.go`
-
-1. Fetch `ConditionalTTL`. If not found → ignore.
-2. **If being deleted** (DeletionTimestamp set): run finalizers **one per reconcile cycle**:
-   - `cleaner.vtex.io/target-finalizer` — deletes targets with `delete: true`
-   - `cleaner.vtex.io/release-finalizer` — uninstalls Helm release if configured
-   - `cleaner.vtex.io/cloud-event-finalizer` — sends CloudEvent to configured sink
-3. Check if TTL has expired. If not → requeue after remaining duration, set `Ready=Unknown`.
-4. Resolve all targets from the cluster.
-5. Evaluate CEL conditions:
-   - Compile errors / type errors → non-retryable, set `Ready=False`
-   - Runtime errors → retryable, requeue after `retry.period`
-   - Conditions not met → retryable, requeue after `retry.period`
-6. Conditions met → snapshot target states into `status.targets`, add all three finalizers, then self-delete the `ConditionalTTL`.
-
-**Key invariant**: Finalizers are added only when deletion actually fires, not at creation. This prevents premature target deletion if a user manually deletes the `ConditionalTTL` before its TTL expires.
-
-**Key invariant**: Finalizers are processed one at a time (one per reconcile cycle) to avoid double-execution. Do not collapse finalizer handling into a single loop.
-
----
-
-## CEL Evaluation
-
-Package: `custom_cel/`
-
-- `BuildCELOptions(cTTL)` — builds the CEL env with `ext.Strings()`, `ext.Bindings()`, custom `Lists()` extension, `time` variable, and one variable per target with `includeWhenEvaluating: true`
-- `BuildCELContext(targets, time)` — maps target names → their unstructured state + `"time"` → current time
-- `EvaluateCELConditions(opts, ctx, conditions, readyCondition)` — compiles and evaluates all conditions in order; returns `(conditionsMet bool, retryable bool)`
-
-Retryability rules:
-- Compile error → `(false, false)`
-- Runtime eval error → `(false, true)`
-- Condition evaluates to `false` → `(false, true)`
-- All true → `(true, false)`
-
----
-
-## Development Commands
+### Build & Run
 
 ```bash
-# After editing api/v1alpha1/ types:
-make generate manifests
-
-# Run tests (downloads kubebuilder envtest assets automatically):
-make test
-
-# Open HTML coverage report:
-make coverage
-
-# Run controller locally against current kubeconfig context:
-make run
-
-# Install CRDs into cluster:
-make install
-
-# Generate Helm chart:
-make helm
-
-# Regenerate docs/api-reference.md:
-make gen-docs
+make build              # Compile
+make run                # Run against current kubeconfig context
+make install            # Install CRDs into cluster
+make generate manifests # Regenerate after editing api/v1alpha1/ types — commit generated files in the same PR
+make helm               # Regenerate Helm chart
+make gen-docs           # Regenerate docs/api-reference.md
+make fmt vet            # Format + lint — required before committing
 ```
 
----
+### Test Commands
 
-## Testing
+```bash
+make test      # All tests (envtest assets downloaded automatically)
+make coverage  # Open HTML coverage report
+```
 
-- Framework: **Ginkgo v2** + **Gomega** + **kubebuilder envtest**
-- Tests run against a real API server (no mocks for the controller layer)
-- Test entry point: `controllers/suite_test.go`
-- Coverage output: `cover.out`
+### Architecture Boundaries
 
----
+| Layer | Path | Responsibility |
+|---|---|---|
+| Entry point | `main.go` | Manager bootstrap, flag/env parsing — no business logic |
+| Controllers | `controllers/` | Reconcile loop, finalizer orchestration |
+| CEL | `custom_cel/` | Condition compilation + evaluation — no Kubernetes client calls |
+| API types | `api/v1alpha1/` | CRD structs, kubebuilder markers — pure types, no I/O |
+| Config | `config/` | Generated CRD/RBAC manifests — do not hand-edit (except `config/default/` overlays) |
 
-## CI/CD
+Rule: `custom_cel/` MUST NOT import `controllers/`. `api/v1alpha1/` MUST NOT import `controllers/` or `custom_cel/`.
 
-- CI: Drone (`drone-robots.vtex.com`)
-- GitHub Actions: `.github/workflows/publish.yaml` (image publish)
-- Image: `public.ecr.aws/f8y0w2c4/cleaner-controller:<version>`
+### Coding Conventions
 
----
+- Every I/O function must accept `context.Context` as first argument and honor cancellation.
+- Wrap errors with `fmt.Errorf("...: %w", err)` — never log and return `nil`.
+- Structured logging via `log.FromContext(ctx)`; every reconcile log line must include resource name/namespace as key-value pairs.
+- Use `Eventually` (Gomega) for async assertions — `time.Sleep` is forbidden as a correctness gate.
+- Every new exported function in `custom_cel/` must have a unit test.
+- Controller-layer tests must use kubebuilder envtest (real API server) — mock-based controller tests are forbidden.
 
-## Known TODOs (from code comments)
+### Reconciler Key Facts
 
-- Admission webhook to enforce `retry != nil` when `conditions` is non-empty
-- Helm driver (`"secret"`) should be configurable
-- Admission webhook to enforce `name != "time"` on targets (currently a kubebuilder regex marker)
-- Pagination: list operations check for a continuation token but do not page — an error is returned if one appears
+- Finalizer order: `target-finalizer` → `release-finalizer` → `cloud-event-finalizer`; one per reconcile cycle — do not batch.
+- Finalizers are added only after TTL expires **and** all CEL conditions are met — never at creation.
+- CEL retryability: compile error → `(false, false)`; runtime error or unmet condition → `(false, true)`.
+- `time` is a reserved CEL variable (always injected as current timestamp). Target names must not use it.
+- `r.List` returns an error if a continuation token appears — do not silently drop it when adding new list calls.
+
+### Safety Guardrails
+
+- NEVER commit secrets, credentials, or `.env` files.
+- NEVER hand-edit `config/crd/` or `config/rbac/` — run `make generate manifests` instead.
+- NEVER bypass `make test` — envtest catches mock/real divergence that unit mocks miss.
+- Do not batch finalizer handling; sequential processing prevents double-execution.
+- Do not modify `.specify/memory/constitution.md` without an explicit PR review by a maintainer in CODEOWNERS.
