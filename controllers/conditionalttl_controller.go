@@ -296,13 +296,20 @@ func sanitizeTargetState(u *unstructured.Unstructured) *unstructured.Unstructure
 	stripManagedFields(sanitized.Object)
 
 	items, found, err := unstructured.NestedSlice(sanitized.Object, "items")
-	if err != nil || !found || len(items) <= maxPersistedTargetListItems {
+	if err != nil || !found {
 		return sanitized
 	}
+	// strip managedFields from every item regardless of list size: a list
+	// under the cap can still be oversized if individual items carry a
+	// large managedFields history.
 	for _, item := range items {
 		if obj, ok := item.(map[string]interface{}); ok {
 			stripManagedFields(obj)
 		}
+	}
+	if len(items) <= maxPersistedTargetListItems {
+		_ = unstructured.SetNestedSlice(sanitized.Object, items, "items")
+		return sanitized
 	}
 	_ = unstructured.SetNestedSlice(sanitized.Object, items[:maxPersistedTargetListItems], "items")
 	unstructured.RemoveNestedField(sanitized.Object, "metadata", "continue")
