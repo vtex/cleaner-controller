@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/vtex/cleaner-controller/custom_cel"
+	"strings"
 	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
@@ -44,6 +45,14 @@ import (
 
 	cleanerv1alpha1 "github.com/vtex/cleaner-controller/api/v1alpha1"
 )
+
+// maxPersistedTargetListItems bounds how many full item states we persist
+// to a ConditionalTTL's status for a label-selector-resolved (list) target.
+// The full, untruncated list is still used in-memory for CEL evaluation;
+// this cap only applies to what gets written to etcd, to avoid a large
+// match blowing past the apiserver/etcd request size limit and jamming
+// the resource's reconciliation permanently.
+const maxPersistedTargetListItems = 20
 
 var finalizers = []struct {
 	name    string
@@ -162,7 +171,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// preserve targets' state when conditions were met
 	// to include in the cloudevent
-	cTTL.Status.Targets = ts
+	cTTL.Status.Targets = sanitizeTargetStatusesForPersistence(ts)
 	cTTL.Status.EvaluationTime = &metav1.Time{Time: t}
 	if err := r.Status().Update(ctx, cTTL); err != nil {
 		return ctrl.Result{}, err
@@ -254,6 +263,78 @@ func (r *ConditionalTTLReconciler) resolveTargets(ctx context.Context, cTTL *cle
 		}
 	}
 	return ts, nil
+}
+
+// sanitizeTargetStatusesForPersistence returns a copy of ts safe to persist
+// to a ConditionalTTL's status subresource. A target resolved via
+// labelSelector embeds the full unstructured content of every matched
+// object in a single TargetStatus.State (as the list's "items"); with
+// enough matches, or with objects carrying a large metadata.managedFields
+// history, that single write can exceed the apiserver/etcd request size
+// limit ("etcdserver: request is too large"), permanently failing every
+// future reconcile for the resource (the status never actually persists,
+// so the failure recurs every time). This trims the two known unbounded
+// contributors before persisting, without touching the input slice, which
+// is also used as-is for in-memory CEL condition evaluation.
+func sanitizeTargetStatusesForPersistence(ts []cleanerv1alpha1.TargetStatus) []cleanerv1alpha1.TargetStatus {
+	sanitized := make([]cleanerv1alpha1.TargetStatus, len(ts))
+	for i, t := range ts {
+		t.State = sanitizeTargetState(t.State)
+		sanitized[i] = t
+	}
+	return sanitized
+}
+
+// sanitizeTargetState deep-copies u and strips content known to grow
+// unbounded: metadata.managedFields (never useful downstream) on every
+// object, and, for a resolved List (identified by an "items" field), the
+// tail of matched items beyond maxPersistedTargetListItems.
+func sanitizeTargetState(u *unstructured.Unstructured) *unstructured.Unstructured {
+	if u == nil {
+		return nil
+	}
+	sanitized := u.DeepCopy()
+	stripManagedFields(sanitized.Object)
+
+	// Only apply list truncation to an actual List kind. Detecting a list by
+	// the mere presence of a top-level "items" field would misclassify a
+	// single-object target (resolved via t.Reference.Name) whose own
+	// spec/data happens to contain a field literally named "items",
+	// silently truncating and corrupting that object's persisted state.
+	if !strings.HasSuffix(sanitized.GetKind(), "List") {
+		return sanitized
+	}
+
+	items, found, err := unstructured.NestedSlice(sanitized.Object, "items")
+	if err != nil || !found {
+		return sanitized
+	}
+	// strip managedFields from every item regardless of list size: a list
+	// under the cap can still be oversized if individual items carry a
+	// large managedFields history.
+	for _, item := range items {
+		if obj, ok := item.(map[string]interface{}); ok {
+			stripManagedFields(obj)
+		}
+	}
+	if len(items) <= maxPersistedTargetListItems {
+		_ = unstructured.SetNestedSlice(sanitized.Object, items, "items")
+		return sanitized
+	}
+	_ = unstructured.SetNestedSlice(sanitized.Object, items[:maxPersistedTargetListItems], "items")
+	unstructured.RemoveNestedField(sanitized.Object, "metadata", "continue")
+	sanitized.Object["truncatedItemCount"] = len(items)
+	return sanitized
+}
+
+// stripManagedFields removes metadata.managedFields from an unstructured
+// object's content map in place, if present.
+func stripManagedFields(obj map[string]interface{}) {
+	metadata, ok := obj["metadata"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	delete(metadata, "managedFields")
 }
 
 // deleteTarget deletes a target and publishes events regarding what was done
