@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/vtex/cleaner-controller/custom_cel"
+	"strings"
 	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
@@ -294,6 +295,15 @@ func sanitizeTargetState(u *unstructured.Unstructured) *unstructured.Unstructure
 	}
 	sanitized := u.DeepCopy()
 	stripManagedFields(sanitized.Object)
+
+	// Only apply list truncation to an actual List kind. Detecting a list by
+	// the mere presence of a top-level "items" field would misclassify a
+	// single-object target (resolved via t.Reference.Name) whose own
+	// spec/data happens to contain a field literally named "items",
+	// silently truncating and corrupting that object's persisted state.
+	if !strings.HasSuffix(sanitized.GetKind(), "List") {
+		return sanitized
+	}
 
 	items, found, err := unstructured.NestedSlice(sanitized.Object, "items")
 	if err != nil || !found {

@@ -141,6 +141,38 @@ func TestSanitizeTargetState_LargeList_TruncatedWithCount(t *testing.T) {
 	}
 }
 
+func TestSanitizeTargetState_SingleObjectWithItemsField_NotMisclassifiedAsList(t *testing.T) {
+	// A single-object target (resolved via t.Reference.Name, not a
+	// labelSelector list) whose own spec/data happens to contain a field
+	// literally named "items" must not be mistaken for a Kubernetes List
+	// and truncated. Detection must be based on Kind, not field presence.
+	ownItems := make([]interface{}, maxPersistedTargetListItems+5)
+	for i := range ownItems {
+		ownItems[i] = fmt.Sprintf("entry-%d", i)
+	}
+	singleObject := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "example.com/v1",
+		"kind":       "SomeCustomResource", // does not end in "List"
+		"metadata":   map[string]interface{}{"name": "my-resource"},
+		"spec": map[string]interface{}{
+			"items": ownItems, // legitimate field on this CRD, not a List wrapper
+		},
+	}}
+
+	sanitized := sanitizeTargetState(singleObject)
+
+	gotItems, found, err := unstructured.NestedSlice(sanitized.Object, "spec", "items")
+	if err != nil || !found {
+		t.Fatalf("expected spec.items to survive untouched, found=%v err=%v", found, err)
+	}
+	if len(gotItems) != len(ownItems) {
+		t.Errorf("expected spec.items left untruncated at %d entries, got %d", len(ownItems), len(gotItems))
+	}
+	if _, present := sanitized.Object["truncatedItemCount"]; present {
+		t.Errorf("did not expect truncatedItemCount on a non-List object")
+	}
+}
+
 func TestSanitizeTargetStatusesForPersistence(t *testing.T) {
 	ts := []cleanerv1alpha1.TargetStatus{
 		{
