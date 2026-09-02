@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/vtex/cleaner-controller/custom_cel"
+	"os"
 	"strings"
 	"time"
 
@@ -394,8 +395,13 @@ func (r *ConditionalTTLReconciler) helmReleaseFinalizer(ctx context.Context, cTT
 	if cfg == nil {
 		// HelmConfig should only be non-nil during tests
 		cfg = new(action.Configuration)
+		clientGetter, err := r.clientForNamespace(cTTL.ObjectMeta.Namespace)
+		if err != nil {
+			r.Recorder.Eventf(cTTL, corev1.EventTypeWarning, "HelmSetupFailed", "Error building Kubernetes client for Helm: %s", err.Error())
+			return err
+		}
 		// TODO: helm driver (i.e "secret") should be configurable
-		err := cfg.Init(r.clientForNamespace(cTTL.ObjectMeta.Namespace), cTTL.ObjectMeta.Namespace, "secret", func(format string, args ...interface{}) {
+		err = cfg.Init(clientGetter, cTTL.ObjectMeta.Namespace, "secret", func(format string, args ...interface{}) {
 			log.V(1).Info(fmt.Sprintf(format, args...))
 		})
 		if err != nil {
@@ -447,17 +453,40 @@ func (r *ConditionalTTLReconciler) cloudEventFinalizer(ctx context.Context, cTTL
 }
 
 // clientForNamespace builds a genericclioptions.RESTClientGetter required by
-// the Helm API
-func (r *ConditionalTTLReconciler) clientForNamespace(namespace string) *genericclioptions.ConfigFlags {
+// the Helm API.
+//
+// r.Config is resolved once, at manager startup (see ctrl.GetConfigOrDie in
+// main.go). For in-cluster configs, rest.InClusterConfig reads the projected
+// service account token file once and copies its contents into
+// r.Config.BearerToken. That token is short-lived and is rotated by the
+// kubelet by rewriting r.Config.BearerTokenFile on disk; client-go's own
+// transport (used by the controller-runtime client) knows to re-read
+// BearerTokenFile on every request and therefore never notices the rotation.
+// genericclioptions.ConfigFlags has no equivalent "read from file" option, so
+// if we copy the stale r.Config.BearerToken string here, every Helm
+// uninstall eventually starts failing with 401s ("Kubernetes cluster
+// unreachable: ... provide credentials") once the token captured at startup
+// expires - only a pod restart (which re-reads the token file from scratch)
+// masks the problem temporarily. To avoid this, re-read the current token
+// from BearerTokenFile on every call, mirroring what client-go itself does.
+func (r *ConditionalTTLReconciler) clientForNamespace(namespace string) (*genericclioptions.ConfigFlags, error) {
+	bearerToken := r.Config.BearerToken
+	if r.Config.BearerTokenFile != "" {
+		token, err := os.ReadFile(r.Config.BearerTokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("error reading bearer token file %q: %w", r.Config.BearerTokenFile, err)
+		}
+		bearerToken = strings.TrimSpace(string(token))
+	}
 	configFlags := genericclioptions.NewConfigFlags(false)
 	configFlags.APIServer = &r.Config.Host
-	configFlags.BearerToken = &r.Config.BearerToken
+	configFlags.BearerToken = &bearerToken
 	configFlags.CAFile = &r.Config.CAFile
 	configFlags.CertFile = &r.Config.CertFile
 	configFlags.KeyFile = &r.Config.KeyFile
 	configFlags.Insecure = &r.Config.Insecure
 	configFlags.Namespace = &namespace
-	return configFlags
+	return configFlags, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
