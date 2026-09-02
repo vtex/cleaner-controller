@@ -24,6 +24,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -114,31 +115,51 @@ func (r *IdleKnativeCleanupReconciler) Reconcile(ctx context.Context, req ctrl.R
 		log.Error(err, "failed to read min-scale annotation")
 		return ctrl.Result{}, err
 	}
-	if !minScaleZero {
-		return ctrl.Result{}, nil
+
+	candidate := false
+	if minScaleZero {
+		candidate, err = r.deploymentsScaledToZero(ctx, svc.GetNamespace(), svc.GetName())
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("listing deployments for service %s/%s: %w", svc.GetNamespace(), svc.GetName(), err)
+		}
 	}
 
-	candidate, err := r.deploymentsScaledToZero(ctx, svc.GetNamespace(), svc.GetName())
+	since, hasSince, err := readIdleSince(svc)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("listing deployments for service %s/%s: %w", svc.GetNamespace(), svc.GetName(), err)
+		log.Error(err, "invalid idle-since annotation, clearing it")
+		hasSince = false
 	}
+
 	if !candidate {
+		if hasSince {
+			if err := r.clearIdleSince(ctx, svc); err != nil {
+				return ctrl.Result{}, err
+			}
+			r.Recorder.Eventf(svc, corev1.EventTypeNormal, "IdleServiceReactivated", "Service is no longer idle, idle-since cleared")
+		}
 		return ctrl.Result{}, nil
 	}
 
-	_, hasSince, err := readIdleSince(svc)
-	if err != nil {
-		log.Error(err, "invalid idle-since annotation, will overwrite it")
-	}
-	if hasSince {
-		return ctrl.Result{}, nil
+	now := time.Now()
+	if !hasSince {
+		if err := r.patchIdleSince(ctx, svc, now); err != nil {
+			return ctrl.Result{}, err
+		}
+		r.Recorder.Eventf(svc, corev1.EventTypeNormal, "IdleServiceMarked", "Service marked idle, will be deleted after %s if it stays idle", r.Threshold)
+		return ctrl.Result{RequeueAfter: r.Threshold}, nil
 	}
 
-	if err := r.patchIdleSince(ctx, svc, time.Now()); err != nil {
+	elapsed := now.Sub(since)
+	if elapsed < r.Threshold {
+		return ctrl.Result{RequeueAfter: r.Threshold - elapsed}, nil
+	}
+
+	if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
+		r.Recorder.Eventf(svc, corev1.EventTypeWarning, "IdleServiceDeleteFailed", "Error deleting idle service: %s", err.Error())
 		return ctrl.Result{}, err
 	}
-	r.Recorder.Eventf(svc, corev1.EventTypeNormal, "IdleServiceMarked", "Service marked idle, will be deleted after %s if it stays idle", r.Threshold)
-	return ctrl.Result{RequeueAfter: r.Threshold}, nil
+	r.Recorder.Eventf(svc, corev1.EventTypeNormal, "IdleServiceDeleted", "Service deleted after being idle for %s", elapsed.Round(time.Second))
+	return ctrl.Result{}, nil
 }
 
 // deploymentsScaledToZero reports whether every Deployment labeled
@@ -175,6 +196,15 @@ func (r *IdleKnativeCleanupReconciler) patchIdleSince(ctx context.Context, svc *
 		anns = map[string]string{}
 	}
 	anns[idleAnnotationIdleSince] = t.UTC().Format(time.RFC3339)
+	svc.SetAnnotations(anns)
+	return r.Patch(ctx, svc, patch)
+}
+
+// clearIdleSince removes the cleaner.vtex.io/idle-since annotation.
+func (r *IdleKnativeCleanupReconciler) clearIdleSince(ctx context.Context, svc *unstructured.Unstructured) error {
+	patch := client.MergeFrom(svc.DeepCopy())
+	anns := svc.GetAnnotations()
+	delete(anns, idleAnnotationIdleSince)
 	svc.SetAnnotations(anns)
 	return r.Patch(ctx, svc, patch)
 }

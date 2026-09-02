@@ -92,4 +92,46 @@ var _ = Describe("IdleKnativeCleanup controller", func() {
 			return getIdleSinceAnnotation(name)
 		}, timeout, interval).ShouldNot(BeEmpty())
 	})
+
+	It("deletes the Service once it has been idle past the threshold", func() {
+		name := "idle-expired"
+		Expect(k8sClient.Create(ctx, buildIdleKnativeService(name, true, false))).To(Succeed())
+		Expect(k8sClient.Create(ctx, buildIdleDeployment(name+"-deployment", name, 0))).To(Succeed())
+
+		Eventually(func() error {
+			found := &unstructured.Unstructured{}
+			found.SetGroupVersionKind(knativeServiceGVK)
+			return k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: ConditionalTTLNamespace}, found)
+		}, idleThreshold*3, interval).ShouldNot(Succeed())
+	})
+
+	It("clears idle-since when the underlying deployment scales back up", func() {
+		name := "idle-reactivated"
+		depName := name + "-deployment"
+		Expect(k8sClient.Create(ctx, buildIdleKnativeService(name, true, false))).To(Succeed())
+		Expect(k8sClient.Create(ctx, buildIdleDeployment(depName, name, 0))).To(Succeed())
+
+		Eventually(func() (string, error) {
+			return getIdleSinceAnnotation(name)
+		}, timeout, interval).ShouldNot(BeEmpty())
+
+		foundDep := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: depName, Namespace: ConditionalTTLNamespace}, foundDep)).To(Succeed())
+		foundDep.Status.Replicas = 1
+		Expect(k8sClient.Status().Update(ctx, foundDep)).To(Succeed())
+
+		Eventually(func() (string, error) {
+			return getIdleSinceAnnotation(name)
+		}, timeout, interval).Should(BeEmpty())
+	})
+
+	It("never marks an excluded Service as idle", func() {
+		name := "idle-excluded"
+		Expect(k8sClient.Create(ctx, buildIdleKnativeService(name, true, true))).To(Succeed())
+		Expect(k8sClient.Create(ctx, buildIdleDeployment(name+"-deployment", name, 0))).To(Succeed())
+
+		Consistently(func() (string, error) {
+			return getIdleSinceAnnotation(name)
+		}, duration, interval).Should(BeEmpty())
+	})
 })
