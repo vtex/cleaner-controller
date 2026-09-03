@@ -101,7 +101,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			}
 			controllerutil.RemoveFinalizer(cTTL, finalizer.name)
 			if err := r.Update(ctx, cTTL); err != nil {
-				return ctrl.Result{}, err
+				return handleUpdateErr(log, err)
 			}
 			// wait for next reconcile due to update above
 			// to continue handling finalizers, otherwise
@@ -124,7 +124,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		apimeta.SetStatusCondition(&cTTL.Status.Conditions, readyCondition)
 		if err := r.Status().Update(ctx, cTTL); err != nil {
-			return ctrl.Result{}, err
+			return handleUpdateErr(log, err)
 		}
 		return ctrl.Result{RequeueAfter: expiresAt.Sub(t)}, nil
 	}
@@ -141,7 +141,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		apimeta.SetStatusCondition(&cTTL.Status.Conditions, readyCondition)
 		if err := r.Status().Update(ctx, cTTL); err != nil {
-			return ctrl.Result{}, err
+			return handleUpdateErr(log, err)
 		}
 
 		// TODO: maybe we can carry on with deletion of the CRD
@@ -160,7 +160,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	if !condsMet {
 		if err := r.Status().Update(ctx, cTTL); err != nil {
-			return ctrl.Result{}, err
+			return handleUpdateErr(log, err)
 		}
 		if retryable && cTTL.Spec.Retry != nil {
 			// TODO: admission webhook should verify Retry is not nil
@@ -175,7 +175,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	cTTL.Status.Targets = sanitizeTargetStatusesForPersistence(ts)
 	cTTL.Status.EvaluationTime = &metav1.Time{Time: t}
 	if err := r.Status().Update(ctx, cTTL); err != nil {
-		return ctrl.Result{}, err
+		return handleUpdateErr(log, err)
 	}
 
 	// ensure all finalizers are present.
@@ -193,7 +193,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		if needsUpdate {
 			if err := r.Update(ctx, cTTL); err != nil {
-				return ctrl.Result{}, err
+				return handleUpdateErr(log, err)
 			}
 		}
 	}
