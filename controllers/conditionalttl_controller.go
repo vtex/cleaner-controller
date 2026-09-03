@@ -217,7 +217,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	if err := r.Delete(ctx, cTTL); err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	return ctrl.Result{}, nil
@@ -427,11 +427,33 @@ func (r *ConditionalTTLReconciler) helmReleaseFinalizer(ctx context.Context, cTT
 			return err
 		}
 	}
+	// Check existence upfront rather than relying solely on uninstall.Run's
+	// own error to signal "already gone": when Uninstall fails partway
+	// through - resources deleted but the release record itself missing by
+	// the time it reaches the purge step (e.g. this same finalizer already
+	// ran once and got requeued, or something else purged it concurrently)
+	// - Helm wraps driver.ErrReleaseNotFound in a new, flattened
+	// errors.Errorf("uninstallation completed with N error(s): ...") that
+	// breaks errors.Is (see helm.sh/helm/v3/pkg/action/uninstall.go:163).
+	// Without this, that specific failure mode retries the finalizer
+	// forever instead of recognizing there's nothing left to clean up.
+	if _, err := action.NewGet(cfg).Run(cTTL.Spec.Helm.Release); err != nil {
+		if isReleaseNotFoundErr(err) {
+			return nil
+		}
+		r.Recorder.Eventf(cTTL, corev1.EventTypeWarning, "HelmGetFailed", "Error checking Helm release %q: %s", cTTL.Spec.Helm.Release, err.Error())
+		return err
+	}
 	uninstall := action.NewUninstall(cfg)
 	// TODO: support custom options for uninstall such as Wait and DisableHooks?
 	_, err := uninstall.Run(cTTL.Spec.Helm.Release)
 	if err != nil {
-		if errors.Is(err, driver.ErrReleaseNotFound) {
+		// Belt-and-suspenders for the same race the upfront Get above
+		// mostly closes: if the release disappears between the Get and
+		// here, Run's own error is the flattened one described above, so
+		// errors.Is can't catch it - fall back to matching the sentinel's
+		// text, which does survive the flattening.
+		if isReleaseNotFoundErr(err) {
 			return nil
 		}
 		r.Recorder.Eventf(cTTL, corev1.EventTypeWarning, "HelmUninstallFailed", "Error uninstalling Helm release %q: %s", cTTL.Spec.Helm.Release, err.Error())
@@ -439,6 +461,17 @@ func (r *ConditionalTTLReconciler) helmReleaseFinalizer(ctx context.Context, cTT
 	}
 	r.Recorder.Eventf(cTTL, corev1.EventTypeNormal, "HelmReleaseUninstalled", "Helm release %q uninstalled", cTTL.Spec.Helm.Release)
 	return nil
+}
+
+// isReleaseNotFoundErr reports whether err indicates the Helm release was
+// already gone. errors.Is(err, driver.ErrReleaseNotFound) only matches when
+// the sentinel survives unwrapped; Uninstall.Run flattens it into a new
+// errors.Errorf-formatted string when the release disappears partway
+// through (resources deleted, then the purge step finds no release record
+// left), so this also falls back to matching the sentinel's text, which
+// does survive that flattening.
+func isReleaseNotFoundErr(err error) bool {
+	return errors.Is(err, driver.ErrReleaseNotFound) || strings.Contains(err.Error(), driver.ErrReleaseNotFound.Error())
 }
 
 // cloudEventFinalizer handles cleaner.vtex.io/cloud-event-finalizer by sending
