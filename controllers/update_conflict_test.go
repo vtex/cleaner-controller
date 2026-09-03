@@ -63,9 +63,3 @@ func TestHandleUpdateErr(t *testing.T) {
 		t.Fatalf("handleUpdateErr(NotFound) set Requeue = true; only conflicts should self-requeue")
 	}
 }
-
-// warn must not panic against a non-zapr logr.LogSink (e.g. the test
-// no-op logger); it falls back to Info in that case.
-func TestWarnFallsBackWithoutZaprSink(t *testing.T) {
-	warn(logr.Discard(), errors.New("boom"), "conflict updating ConditionalTTL", "name", "sfj-c5bc713--umbroco")
-}

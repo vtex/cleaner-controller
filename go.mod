@@ -7,7 +7,6 @@ toolchain go1.22.6
 require (
 	github.com/cloudevents/sdk-go/v2 v2.13.0
 	github.com/go-logr/logr v1.4.2
-	github.com/go-logr/zapr v1.3.0
 	github.com/google/cel-go v0.20.1
 	github.com/onsi/ginkgo/v2 v2.19.0
 	github.com/onsi/gomega v1.33.1
@@ -61,6 +60,7 @@ require (
 	github.com/go-errors/errors v1.4.2 // indirect
 	github.com/go-gorp/gorp/v3 v3.1.0 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/go-logr/zapr v1.3.0 // indirect
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
 	github.com/go-openapi/jsonreference v0.20.2 // indirect
 	github.com/go-openapi/swag v0.23.0 // indirect

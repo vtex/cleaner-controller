@@ -18,7 +18,6 @@ package controllers
 
 import (
 	"github.com/go-logr/logr"
-	"github.com/go-logr/zapr"
 	"github.com/prometheus/client_golang/prometheus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -48,11 +47,14 @@ func init() {
 // into a reconcile outcome. A conflict - the object was modified since we
 // read it, e.g. by the controller's own prior status write racing a fresh
 // watch-triggered reconcile - is expected and self-heals: it's logged at
-// Warn instead of Error, counted separately from real failures, and
+// Info instead of Error, counted separately from real failures, and
 // answered with a requeue instead of a returned error. Returning the error
 // here would make controller-runtime log it again at Error as "Reconciler
 // error" and count it against controller_runtime_reconcile_errors_total
-// alongside genuine failures.
+// alongside genuine failures. Info rather than a synthetic Warn: logr (used
+// throughout via log.FromContext) has no Warn level, only Info and Error,
+// and Info is where every other non-fatal, expected condition in this
+// codebase already logs.
 func handleUpdateErr(log logr.Logger, err error) (ctrl.Result, error) {
 	if err == nil {
 		return ctrl.Result{}, nil
@@ -61,22 +63,6 @@ func handleUpdateErr(log logr.Logger, err error) (ctrl.Result, error) {
 		return ctrl.Result{}, err
 	}
 	conditionalTTLUpdateConflictsTotal.Inc()
-	warn(log, err, "Conflict updating ConditionalTTL, retrying with latest version")
+	log.Info("Conflict updating ConditionalTTL, retrying with latest version", "error", err.Error())
 	return ctrl.Result{Requeue: true}, nil
-}
-
-// warn logs at the underlying zap logger's Warn level. logr, used
-// throughout via log.FromContext, has no Warn method - only Info and Error
-// - so downgrading a non-error condition to Info would bury it, and
-// leaving it as Error is the exact miscategorization this exists to fix.
-// The zapr sink configured in main.go implements zapr.Underlier, giving
-// access to the real *zap.Logger; any other logr.LogSink (e.g. under test)
-// falls back to Info so this never panics on the type assertion.
-func warn(log logr.Logger, err error, msg string, keysAndValues ...interface{}) {
-	kv := append(keysAndValues, "error", err.Error())
-	if underlier, ok := log.GetSink().(zapr.Underlier); ok {
-		underlier.GetUnderlying().Sugar().Warnw(msg, kv...)
-		return
-	}
-	log.Info(msg, kv...)
 }
