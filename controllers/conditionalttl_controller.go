@@ -87,11 +87,15 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	log := log.FromContext(ctx)
 	cTTL := &cleanerv1alpha1.ConditionalTTL{}
 	if err := r.Get(ctx, req.NamespacedName, cTTL); err != nil {
+		if apierrors.IsNotFound(err) {
+			stuckObjects.clear(req.NamespacedName)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	// object is being deleted
 	if !cTTL.DeletionTimestamp.IsZero() {
+		stuckObjects.clear(req.NamespacedName)
 		for _, finalizer := range finalizers {
 			if !controllerutil.ContainsFinalizer(cTTL, finalizer.name) {
 				continue
@@ -101,7 +105,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			}
 			controllerutil.RemoveFinalizer(cTTL, finalizer.name)
 			if err := r.Update(ctx, cTTL); err != nil {
-				return ctrl.Result{}, err
+				return handleUpdateErr(log, err)
 			}
 			// wait for next reconcile due to update above
 			// to continue handling finalizers, otherwise
@@ -115,6 +119,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	t := time.Now()
 	expiresAt := cTTL.CreationTimestamp.Add(cTTL.Spec.TTL.Duration)
 	if !t.After(expiresAt) {
+		stuckObjects.clear(req.NamespacedName)
 		readyCondition := metav1.Condition{
 			Status:             metav1.ConditionUnknown,
 			Reason:             cleanerv1alpha1.ConditionReasonNotExpired,
@@ -124,7 +129,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		apimeta.SetStatusCondition(&cTTL.Status.Conditions, readyCondition)
 		if err := r.Status().Update(ctx, cTTL); err != nil {
-			return ctrl.Result{}, err
+			return handleUpdateErr(log, err)
 		}
 		return ctrl.Result{RequeueAfter: expiresAt.Sub(t)}, nil
 	}
@@ -132,6 +137,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	ts, err := r.resolveTargets(ctx, cTTL)
 	if err != nil {
 		log.Error(err, "Failed to resolve target")
+		stuckObjects.set(req.NamespacedName, cleanerv1alpha1.ConditionReasonTargetResolveError)
 		readyCondition := metav1.Condition{
 			Status:             metav1.ConditionFalse,
 			Reason:             cleanerv1alpha1.ConditionReasonTargetResolveError,
@@ -141,7 +147,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		apimeta.SetStatusCondition(&cTTL.Status.Conditions, readyCondition)
 		if err := r.Status().Update(ctx, cTTL); err != nil {
-			return ctrl.Result{}, err
+			return handleUpdateErr(log, err)
 		}
 
 		// TODO: maybe we can carry on with deletion of the CRD
@@ -158,9 +164,18 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	condsMet, retryable := custom_cel.EvaluateCELConditions(celOpts, celCtx, cTTL.Spec.Conditions, &readyCondition)
 	apimeta.SetStatusCondition(&cTTL.Status.Conditions, readyCondition)
 
+	if readyCondition.Reason == cleanerv1alpha1.ConditionReasonWaitingForConditions {
+		// normal wait, not a problem: the conditions just aren't true yet
+		stuckObjects.clear(req.NamespacedName)
+	} else if !condsMet {
+		// EnvironmentError / CompileError / EvaluationError / ResultNotBoolean:
+		// all actual problems with the CEL setup or expressions, not routine waits
+		stuckObjects.set(req.NamespacedName, readyCondition.Reason)
+	}
+
 	if !condsMet {
 		if err := r.Status().Update(ctx, cTTL); err != nil {
-			return ctrl.Result{}, err
+			return handleUpdateErr(log, err)
 		}
 		if retryable && cTTL.Spec.Retry != nil {
 			// TODO: admission webhook should verify Retry is not nil
@@ -170,12 +185,15 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
+	// conditions met: this object is healthy and about to be deleted below
+	stuckObjects.clear(req.NamespacedName)
+
 	// preserve targets' state when conditions were met
 	// to include in the cloudevent
 	cTTL.Status.Targets = sanitizeTargetStatusesForPersistence(ts)
 	cTTL.Status.EvaluationTime = &metav1.Time{Time: t}
 	if err := r.Status().Update(ctx, cTTL); err != nil {
-		return ctrl.Result{}, err
+		return handleUpdateErr(log, err)
 	}
 
 	// ensure all finalizers are present.
@@ -193,7 +211,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		if needsUpdate {
 			if err := r.Update(ctx, cTTL); err != nil {
-				return ctrl.Result{}, err
+				return handleUpdateErr(log, err)
 			}
 		}
 	}
