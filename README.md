@@ -40,12 +40,15 @@ Introductory reading:
 
 Deletes Knative Services declaring `autoscaling.knative.dev/min-scale: "0"`
 once all their Deployments have been at 0 replicas for longer than a
-configurable threshold. Disabled by default; opt in per cluster with env
-vars (no rebuild required):
+configurable threshold. `IDLE_KNATIVE_CLEANUP_ENABLED` is a **mode switch**,
+not an additive toggle: a cluster runs cleanup by either `ConditionalTTL`'s
+creation-timestamp TTL or by idle detection, never both. Disabled by
+default (so existing clusters keep running `ConditionalTTL` unchanged);
+opt in per cluster with env vars (no rebuild required):
 
 | Env var | Default | Description |
 |---|---|---|
-| `IDLE_KNATIVE_CLEANUP_ENABLED` | `false` | Set to `true` to register the controller. |
+| `IDLE_KNATIVE_CLEANUP_ENABLED` | `false` | Set to `true` to switch this cluster to idle-based cleanup — this also stops the `ConditionalTTL` reconciler from running. |
 | `IDLE_KNATIVE_CLEANUP_THRESHOLD` | `12h` | Go duration string (e.g. `6h`, `30m`) a Service may stay idle before deletion. |
 
 Opt a specific Service out with the `cleaner.vtex.io/exclude: "true"`
