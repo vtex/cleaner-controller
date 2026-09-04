@@ -35,4 +35,22 @@ Introductory reading:
 	```bash
 	make run
 	```
-	
+
+### Idle Knative Service cleanup
+
+Deletes Knative Services declaring `autoscaling.knative.dev/min-scale: "0"`
+once all their Deployments have been at 0 replicas for longer than a
+configurable threshold. This runs alongside `ConditionalTTL`'s
+creation-timestamp TTL cleanup, not instead of it — both mechanisms are
+active at the same time; `IDLE_KNATIVE_CLEANUP_ENABLED` only turns the idle
+mechanism on or off. Disabled by default; opt in per cluster with env vars
+(no rebuild required):
+
+| Env var | Default | Description |
+|---|---|---|
+| `IDLE_KNATIVE_CLEANUP_ENABLED` | `false` | Set to `true` to also register the idle-cleanup controller. |
+| `IDLE_KNATIVE_CLEANUP_THRESHOLD` | `12h` | Go duration string (e.g. `6h`, `30m`) a Service may stay idle before deletion. |
+
+Opt a specific Service out with the `cleaner.vtex.io/exclude: "true"`
+annotation. Edit the [controller code](./controllers/idle_knative_cleanup_controller.go).
+

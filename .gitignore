@@ -48,3 +48,7 @@ Dockerfile.cross
 # .specify/memory/
 # .specify/specs/
 # .specify/templates/overrides/
+
+# Brainstorming design specs and plans - local working docs, not committed
+docs/superpowers/specs/
+docs/superpowers/plans/

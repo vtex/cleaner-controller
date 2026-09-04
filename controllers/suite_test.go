@@ -104,7 +104,7 @@ var _ = BeforeSuite(func() {
 
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "config", "crd", "bases")},
+		CRDDirectoryPaths:     []string{filepath.Join("..", "config", "crd", "bases"), "testdata"},
 		ErrorIfCRDPathMissing: true,
 	}
 
@@ -146,6 +146,14 @@ var _ = BeforeSuite(func() {
 	}).SetupWithManager(k8sManager)
 	Expect(err).ToNot(HaveOccurred())
 
+	err = (&IdleKnativeCleanupReconciler{
+		Client:    k8sManager.GetClient(),
+		Scheme:    k8sManager.GetScheme(),
+		Recorder:  k8sManager.GetEventRecorderFor("cleaner-controller"),
+		Threshold: idleThreshold,
+	}).SetupWithManager(k8sManager)
+	Expect(err).ToNot(HaveOccurred())
+
 	go func() {
 		defer GinkgoRecover()
 		err = k8sManager.Start(ctx)
@@ -166,6 +174,8 @@ const (
 	timeout  = time.Second * 10
 	duration = time.Second * 10
 	interval = time.Millisecond * 250
+
+	idleThreshold = time.Second * 3
 )
 
 var (

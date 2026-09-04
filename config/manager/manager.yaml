@@ -74,6 +74,11 @@ spec:
         - --leader-elect
         image: controller:latest
         name: manager
+        env:
+        - name: IDLE_KNATIVE_CLEANUP_ENABLED
+          value: "false"
+        - name: IDLE_KNATIVE_CLEANUP_THRESHOLD
+          value: "12h"
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
