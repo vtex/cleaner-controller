@@ -44,19 +44,30 @@ func init() {
 }
 
 // handleUpdateErr turns the error from an r.Update/r.Status().Update call
-// into a reconcile outcome. A conflict - the object was modified since we
-// read it, e.g. by the controller's own prior status write racing a fresh
-// watch-triggered reconcile - is expected and self-heals: it's logged at
-// Info instead of Error, counted separately from real failures, and
-// answered with a requeue instead of a returned error. Returning the error
-// here would make controller-runtime log it again at Error as "Reconciler
-// error" and count it against controller_runtime_reconcile_errors_total
-// alongside genuine failures. Info rather than a synthetic Warn: logr (used
-// throughout via log.FromContext) has no Warn level, only Info and Error,
-// and Info is where every other non-fatal, expected condition in this
-// codebase already logs.
+// into a reconcile outcome.
+//
+// A conflict - the object was modified since we read it, e.g. by the
+// controller's own prior status write racing a fresh watch-triggered
+// reconcile - is expected and self-heals: it's logged at Info instead of
+// Error, counted separately from real failures, and answered with a
+// requeue instead of a returned error. Info rather than a synthetic Warn:
+// logr (used throughout via log.FromContext) has no Warn level, only Info
+// and Error, and Info is where every other non-fatal, expected condition in
+// this codebase already logs.
+//
+// A NotFound - the object was deleted by something else between our Get and
+// this Update - has nothing left to reconcile; it's swallowed with no log
+// and no requeue, same as client.IgnoreNotFound on a Get.
+//
+// Returning the error unchanged for anything else preserves
+// controller-runtime's normal handling: it logs "Reconciler error" at Error
+// and counts it against controller_runtime_reconcile_errors_total, which is
+// correct for a genuine failure.
 func handleUpdateErr(log logr.Logger, err error) (ctrl.Result, error) {
 	if err == nil {
+		return ctrl.Result{}, nil
+	}
+	if apierrors.IsNotFound(err) {
 		return ctrl.Result{}, nil
 	}
 	if !apierrors.IsConflict(err) {

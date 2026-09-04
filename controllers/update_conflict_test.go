@@ -56,10 +56,19 @@ func TestHandleUpdateErr(t *testing.T) {
 		"sfj-c5bc713--umbroco",
 	)
 	res, err = handleUpdateErr(logr.Discard(), notFoundErr)
-	if err != notFoundErr {
-		t.Fatalf("handleUpdateErr(NotFound) swallowed a non-conflict error: got err = %v, want it returned unchanged so it still surfaces as a real reconcile failure", err)
+	if err != nil {
+		t.Fatalf("handleUpdateErr(NotFound) = %v, want nil (the object is already gone, nothing left to update)", err)
 	}
 	if res.Requeue {
-		t.Fatalf("handleUpdateErr(NotFound) set Requeue = true; only conflicts should self-requeue")
+		t.Fatalf("handleUpdateErr(NotFound) set Requeue = true; a deleted object should not be requeued")
+	}
+
+	unrelatedErr := apierrors.NewInternalError(errors.New("boom"))
+	res, err = handleUpdateErr(logr.Discard(), unrelatedErr)
+	if err != unrelatedErr {
+		t.Fatalf("handleUpdateErr(unrelated) swallowed a real error: got err = %v, want it returned unchanged so it still surfaces as a reconcile failure", err)
+	}
+	if res.Requeue {
+		t.Fatalf("handleUpdateErr(unrelated) set Requeue = true; only conflicts should self-requeue")
 	}
 }
