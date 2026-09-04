@@ -116,25 +116,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// IDLE_KNATIVE_CLEANUP_ENABLED is a mode switch, not an additive toggle:
-	// a cluster runs cleanup by either ConditionalTTL's creation-timestamp
-	// TTL or by Knative idle detection, never both.
-	idleCleanupEnabled := os.Getenv("IDLE_KNATIVE_CLEANUP_ENABLED") == "true"
-
-	if !idleCleanupEnabled {
-		if err = (&controllers.ConditionalTTLReconciler{
-			Client:            mgr.GetClient(),
-			Scheme:            mgr.GetScheme(),
-			Config:            mgr.GetConfig(),
-			Recorder:          mgr.GetEventRecorderFor("cleaner-controller"),
-			CloudEventsClient: cec,
-		}).SetupWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create controller", "controller", "ConditionalTTL")
-			os.Exit(1)
-		}
+	if err = (&controllers.ConditionalTTLReconciler{
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		Config:            mgr.GetConfig(),
+		Recorder:          mgr.GetEventRecorderFor("cleaner-controller"),
+		CloudEventsClient: cec,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ConditionalTTL")
+		os.Exit(1)
 	}
 
-	if idleCleanupEnabled {
+	if os.Getenv("IDLE_KNATIVE_CLEANUP_ENABLED") == "true" {
 		thresholdStr := os.Getenv("IDLE_KNATIVE_CLEANUP_THRESHOLD")
 		if thresholdStr == "" {
 			thresholdStr = "12h"
