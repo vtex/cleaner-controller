@@ -21,6 +21,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/vtex/cleaner-controller/custom_cel"
+	"os"
+	"strings"
 	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
@@ -44,6 +46,14 @@ import (
 
 	cleanerv1alpha1 "github.com/vtex/cleaner-controller/api/v1alpha1"
 )
+
+// maxPersistedTargetListItems bounds how many full item states we persist
+// to a ConditionalTTL's status for a label-selector-resolved (list) target.
+// The full, untruncated list is still used in-memory for CEL evaluation;
+// this cap only applies to what gets written to etcd, to avoid a large
+// match blowing past the apiserver/etcd request size limit and jamming
+// the resource's reconciliation permanently.
+const maxPersistedTargetListItems = 20
 
 var finalizers = []struct {
 	name    string
@@ -77,11 +87,15 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	log := log.FromContext(ctx)
 	cTTL := &cleanerv1alpha1.ConditionalTTL{}
 	if err := r.Get(ctx, req.NamespacedName, cTTL); err != nil {
+		if apierrors.IsNotFound(err) {
+			stuckObjects.clear(req.NamespacedName)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	// object is being deleted
 	if !cTTL.DeletionTimestamp.IsZero() {
+		stuckObjects.clear(req.NamespacedName)
 		for _, finalizer := range finalizers {
 			if !controllerutil.ContainsFinalizer(cTTL, finalizer.name) {
 				continue
@@ -91,7 +105,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			}
 			controllerutil.RemoveFinalizer(cTTL, finalizer.name)
 			if err := r.Update(ctx, cTTL); err != nil {
-				return ctrl.Result{}, err
+				return handleUpdateErr(log, err)
 			}
 			// wait for next reconcile due to update above
 			// to continue handling finalizers, otherwise
@@ -105,6 +119,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	t := time.Now()
 	expiresAt := cTTL.CreationTimestamp.Add(cTTL.Spec.TTL.Duration)
 	if !t.After(expiresAt) {
+		stuckObjects.clear(req.NamespacedName)
 		readyCondition := metav1.Condition{
 			Status:             metav1.ConditionUnknown,
 			Reason:             cleanerv1alpha1.ConditionReasonNotExpired,
@@ -114,7 +129,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		apimeta.SetStatusCondition(&cTTL.Status.Conditions, readyCondition)
 		if err := r.Status().Update(ctx, cTTL); err != nil {
-			return ctrl.Result{}, err
+			return handleUpdateErr(log, err)
 		}
 		return ctrl.Result{RequeueAfter: expiresAt.Sub(t)}, nil
 	}
@@ -122,6 +137,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	ts, err := r.resolveTargets(ctx, cTTL)
 	if err != nil {
 		log.Error(err, "Failed to resolve target")
+		stuckObjects.set(req.NamespacedName, cleanerv1alpha1.ConditionReasonTargetResolveError)
 		readyCondition := metav1.Condition{
 			Status:             metav1.ConditionFalse,
 			Reason:             cleanerv1alpha1.ConditionReasonTargetResolveError,
@@ -131,7 +147,7 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		apimeta.SetStatusCondition(&cTTL.Status.Conditions, readyCondition)
 		if err := r.Status().Update(ctx, cTTL); err != nil {
-			return ctrl.Result{}, err
+			return handleUpdateErr(log, err)
 		}
 
 		// TODO: maybe we can carry on with deletion of the CRD
@@ -148,9 +164,18 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	condsMet, retryable := custom_cel.EvaluateCELConditions(celOpts, celCtx, cTTL.Spec.Conditions, &readyCondition)
 	apimeta.SetStatusCondition(&cTTL.Status.Conditions, readyCondition)
 
+	if readyCondition.Reason == cleanerv1alpha1.ConditionReasonWaitingForConditions {
+		// normal wait, not a problem: the conditions just aren't true yet
+		stuckObjects.clear(req.NamespacedName)
+	} else if !condsMet {
+		// EnvironmentError / CompileError / EvaluationError / ResultNotBoolean:
+		// all actual problems with the CEL setup or expressions, not routine waits
+		stuckObjects.set(req.NamespacedName, readyCondition.Reason)
+	}
+
 	if !condsMet {
 		if err := r.Status().Update(ctx, cTTL); err != nil {
-			return ctrl.Result{}, err
+			return handleUpdateErr(log, err)
 		}
 		if retryable && cTTL.Spec.Retry != nil {
 			// TODO: admission webhook should verify Retry is not nil
@@ -160,12 +185,15 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
+	// conditions met: this object is healthy and about to be deleted below
+	stuckObjects.clear(req.NamespacedName)
+
 	// preserve targets' state when conditions were met
 	// to include in the cloudevent
-	cTTL.Status.Targets = ts
+	cTTL.Status.Targets = sanitizeTargetStatusesForPersistence(ts)
 	cTTL.Status.EvaluationTime = &metav1.Time{Time: t}
 	if err := r.Status().Update(ctx, cTTL); err != nil {
-		return ctrl.Result{}, err
+		return handleUpdateErr(log, err)
 	}
 
 	// ensure all finalizers are present.
@@ -183,13 +211,13 @@ func (r *ConditionalTTLReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		if needsUpdate {
 			if err := r.Update(ctx, cTTL); err != nil {
-				return ctrl.Result{}, err
+				return handleUpdateErr(log, err)
 			}
 		}
 	}
 
 	if err := r.Delete(ctx, cTTL); err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	return ctrl.Result{}, nil
@@ -256,6 +284,78 @@ func (r *ConditionalTTLReconciler) resolveTargets(ctx context.Context, cTTL *cle
 	return ts, nil
 }
 
+// sanitizeTargetStatusesForPersistence returns a copy of ts safe to persist
+// to a ConditionalTTL's status subresource. A target resolved via
+// labelSelector embeds the full unstructured content of every matched
+// object in a single TargetStatus.State (as the list's "items"); with
+// enough matches, or with objects carrying a large metadata.managedFields
+// history, that single write can exceed the apiserver/etcd request size
+// limit ("etcdserver: request is too large"), permanently failing every
+// future reconcile for the resource (the status never actually persists,
+// so the failure recurs every time). This trims the two known unbounded
+// contributors before persisting, without touching the input slice, which
+// is also used as-is for in-memory CEL condition evaluation.
+func sanitizeTargetStatusesForPersistence(ts []cleanerv1alpha1.TargetStatus) []cleanerv1alpha1.TargetStatus {
+	sanitized := make([]cleanerv1alpha1.TargetStatus, len(ts))
+	for i, t := range ts {
+		t.State = sanitizeTargetState(t.State)
+		sanitized[i] = t
+	}
+	return sanitized
+}
+
+// sanitizeTargetState deep-copies u and strips content known to grow
+// unbounded: metadata.managedFields (never useful downstream) on every
+// object, and, for a resolved List (identified by an "items" field), the
+// tail of matched items beyond maxPersistedTargetListItems.
+func sanitizeTargetState(u *unstructured.Unstructured) *unstructured.Unstructured {
+	if u == nil {
+		return nil
+	}
+	sanitized := u.DeepCopy()
+	stripManagedFields(sanitized.Object)
+
+	// Only apply list truncation to an actual List kind. Detecting a list by
+	// the mere presence of a top-level "items" field would misclassify a
+	// single-object target (resolved via t.Reference.Name) whose own
+	// spec/data happens to contain a field literally named "items",
+	// silently truncating and corrupting that object's persisted state.
+	if !strings.HasSuffix(sanitized.GetKind(), "List") {
+		return sanitized
+	}
+
+	items, found, err := unstructured.NestedSlice(sanitized.Object, "items")
+	if err != nil || !found {
+		return sanitized
+	}
+	// strip managedFields from every item regardless of list size: a list
+	// under the cap can still be oversized if individual items carry a
+	// large managedFields history.
+	for _, item := range items {
+		if obj, ok := item.(map[string]interface{}); ok {
+			stripManagedFields(obj)
+		}
+	}
+	if len(items) <= maxPersistedTargetListItems {
+		_ = unstructured.SetNestedSlice(sanitized.Object, items, "items")
+		return sanitized
+	}
+	_ = unstructured.SetNestedSlice(sanitized.Object, items[:maxPersistedTargetListItems], "items")
+	unstructured.RemoveNestedField(sanitized.Object, "metadata", "continue")
+	sanitized.Object["truncatedItemCount"] = len(items)
+	return sanitized
+}
+
+// stripManagedFields removes metadata.managedFields from an unstructured
+// object's content map in place, if present.
+func stripManagedFields(obj map[string]interface{}) {
+	metadata, ok := obj["metadata"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	delete(metadata, "managedFields")
+}
+
 // deleteTarget deletes a target and publishes events regarding what was done
 // or any errors encountered.
 func (r *ConditionalTTLReconciler) deleteTarget(ctx context.Context, cTTL *cleanerv1alpha1.ConditionalTTL, target *unstructured.Unstructured) error {
@@ -313,8 +413,13 @@ func (r *ConditionalTTLReconciler) helmReleaseFinalizer(ctx context.Context, cTT
 	if cfg == nil {
 		// HelmConfig should only be non-nil during tests
 		cfg = new(action.Configuration)
+		clientGetter, err := r.clientForNamespace(cTTL.ObjectMeta.Namespace)
+		if err != nil {
+			r.Recorder.Eventf(cTTL, corev1.EventTypeWarning, "HelmSetupFailed", "Error building Kubernetes client for Helm: %s", err.Error())
+			return err
+		}
 		// TODO: helm driver (i.e "secret") should be configurable
-		err := cfg.Init(r.clientForNamespace(cTTL.ObjectMeta.Namespace), cTTL.ObjectMeta.Namespace, "secret", func(format string, args ...interface{}) {
+		err = cfg.Init(clientGetter, cTTL.ObjectMeta.Namespace, "secret", func(format string, args ...interface{}) {
 			log.V(1).Info(fmt.Sprintf(format, args...))
 		})
 		if err != nil {
@@ -322,11 +427,33 @@ func (r *ConditionalTTLReconciler) helmReleaseFinalizer(ctx context.Context, cTT
 			return err
 		}
 	}
+	// Check existence upfront rather than relying solely on uninstall.Run's
+	// own error to signal "already gone": when Uninstall fails partway
+	// through - resources deleted but the release record itself missing by
+	// the time it reaches the purge step (e.g. this same finalizer already
+	// ran once and got requeued, or something else purged it concurrently)
+	// - Helm wraps driver.ErrReleaseNotFound in a new, flattened
+	// errors.Errorf("uninstallation completed with N error(s): ...") that
+	// breaks errors.Is (see helm.sh/helm/v3/pkg/action/uninstall.go:163).
+	// Without this, that specific failure mode retries the finalizer
+	// forever instead of recognizing there's nothing left to clean up.
+	if _, err := action.NewGet(cfg).Run(cTTL.Spec.Helm.Release); err != nil {
+		if isReleaseNotFoundErr(err) {
+			return nil
+		}
+		r.Recorder.Eventf(cTTL, corev1.EventTypeWarning, "HelmGetFailed", "Error checking Helm release %q: %s", cTTL.Spec.Helm.Release, err.Error())
+		return err
+	}
 	uninstall := action.NewUninstall(cfg)
 	// TODO: support custom options for uninstall such as Wait and DisableHooks?
 	_, err := uninstall.Run(cTTL.Spec.Helm.Release)
 	if err != nil {
-		if errors.Is(err, driver.ErrReleaseNotFound) {
+		// Belt-and-suspenders for the same race the upfront Get above
+		// mostly closes: if the release disappears between the Get and
+		// here, Run's own error is the flattened one described above, so
+		// errors.Is can't catch it - fall back to matching the sentinel's
+		// text, which does survive the flattening.
+		if isReleaseNotFoundErr(err) {
 			return nil
 		}
 		r.Recorder.Eventf(cTTL, corev1.EventTypeWarning, "HelmUninstallFailed", "Error uninstalling Helm release %q: %s", cTTL.Spec.Helm.Release, err.Error())
@@ -334,6 +461,17 @@ func (r *ConditionalTTLReconciler) helmReleaseFinalizer(ctx context.Context, cTT
 	}
 	r.Recorder.Eventf(cTTL, corev1.EventTypeNormal, "HelmReleaseUninstalled", "Helm release %q uninstalled", cTTL.Spec.Helm.Release)
 	return nil
+}
+
+// isReleaseNotFoundErr reports whether err indicates the Helm release was
+// already gone. errors.Is(err, driver.ErrReleaseNotFound) only matches when
+// the sentinel survives unwrapped; Uninstall.Run flattens it into a new
+// errors.Errorf-formatted string when the release disappears partway
+// through (resources deleted, then the purge step finds no release record
+// left), so this also falls back to matching the sentinel's text, which
+// does survive that flattening.
+func isReleaseNotFoundErr(err error) bool {
+	return errors.Is(err, driver.ErrReleaseNotFound) || strings.Contains(err.Error(), driver.ErrReleaseNotFound.Error())
 }
 
 // cloudEventFinalizer handles cleaner.vtex.io/cloud-event-finalizer by sending
@@ -366,17 +504,40 @@ func (r *ConditionalTTLReconciler) cloudEventFinalizer(ctx context.Context, cTTL
 }
 
 // clientForNamespace builds a genericclioptions.RESTClientGetter required by
-// the Helm API
-func (r *ConditionalTTLReconciler) clientForNamespace(namespace string) *genericclioptions.ConfigFlags {
+// the Helm API.
+//
+// r.Config is resolved once, at manager startup (see ctrl.GetConfigOrDie in
+// main.go). For in-cluster configs, rest.InClusterConfig reads the projected
+// service account token file once and copies its contents into
+// r.Config.BearerToken. That token is short-lived and is rotated by the
+// kubelet by rewriting r.Config.BearerTokenFile on disk; client-go's own
+// transport (used by the controller-runtime client) knows to re-read
+// BearerTokenFile on every request and therefore never notices the rotation.
+// genericclioptions.ConfigFlags has no equivalent "read from file" option, so
+// if we copy the stale r.Config.BearerToken string here, every Helm
+// uninstall eventually starts failing with 401s ("Kubernetes cluster
+// unreachable: ... provide credentials") once the token captured at startup
+// expires - only a pod restart (which re-reads the token file from scratch)
+// masks the problem temporarily. To avoid this, re-read the current token
+// from BearerTokenFile on every call, mirroring what client-go itself does.
+func (r *ConditionalTTLReconciler) clientForNamespace(namespace string) (*genericclioptions.ConfigFlags, error) {
+	bearerToken := r.Config.BearerToken
+	if r.Config.BearerTokenFile != "" {
+		token, err := os.ReadFile(r.Config.BearerTokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("error reading bearer token file %q: %w", r.Config.BearerTokenFile, err)
+		}
+		bearerToken = strings.TrimSpace(string(token))
+	}
 	configFlags := genericclioptions.NewConfigFlags(false)
 	configFlags.APIServer = &r.Config.Host
-	configFlags.BearerToken = &r.Config.BearerToken
+	configFlags.BearerToken = &bearerToken
 	configFlags.CAFile = &r.Config.CAFile
 	configFlags.CertFile = &r.Config.CertFile
 	configFlags.KeyFile = &r.Config.KeyFile
 	configFlags.Insecure = &r.Config.Insecure
 	configFlags.Namespace = &namespace
-	return configFlags
+	return configFlags, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
