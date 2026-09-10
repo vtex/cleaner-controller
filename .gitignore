@@ -52,3 +52,9 @@ Dockerfile.cross
 # Brainstorming design specs and plans - local working docs, not committed
 docs/superpowers/specs/
 docs/superpowers/plans/
+
+# LikeC4 architecture diagram tooling (docs/architecture/likec4/) --
+# package-lock.json is kept for reproducible installs, node_modules isn't.
+docs/architecture/likec4/node_modules/
+docs/architecture/likec4/dist/
+docs/architecture/likec4/images/

@@ -119,6 +119,10 @@ gen-docs: crd-ref-docs ## Generates Markdown API Reference.
 	$(CRD_REF_DOCS) --source-path=./api/v1alpha1 --renderer=markdown
 	mv out.md ./docs/api-reference.md
 
+.PHONY: diagram
+diagram: ## Preview the C4 architecture diagram locally (http://localhost:5173)
+	@cd docs/architecture/likec4 && npm install && npx likec4 start
+
 ##@ Build
 
 .PHONY: build

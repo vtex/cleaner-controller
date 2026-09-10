@@ -54,3 +54,7 @@ mechanism on or off. Disabled by default; opt in per cluster with env vars
 Opt a specific Service out with the `cleaner.vtex.io/exclude: "true"`
 annotation. Edit the [controller code](./controllers/idle_knative_cleanup_controller.go).
 
+See the [architecture diagram](./docs/architecture/likec4/README.md) for a
+visual overview of what each cleanup mechanism deletes and how the idle timer
+resets on scale-up (`make diagram`).
+

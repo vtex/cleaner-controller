@@ -162,6 +162,17 @@ func (r *IdleKnativeCleanupReconciler) Reconcile(ctx context.Context, req ctrl.R
 	return ctrl.Result{}, nil
 }
 
+// deploymentReplicasAtZero reports whether a Deployment is fully scaled to
+// zero. Both spec and status must be zero: status alone is insufficient
+// because Knative sets spec.replicas before pods appear during a cold start.
+func deploymentReplicasAtZero(d appsv1.Deployment) bool {
+	desired := int32(0)
+	if d.Spec.Replicas != nil {
+		desired = *d.Spec.Replicas
+	}
+	return desired == 0 && d.Status.Replicas == 0
+}
+
 // deploymentsScaledToZero reports whether every Deployment labeled
 // serving.knative.dev/service=<serviceName> in namespace has 0 replicas.
 // It returns false if no such Deployment exists yet.
@@ -181,7 +192,7 @@ func (r *IdleKnativeCleanupReconciler) deploymentsScaledToZero(ctx context.Conte
 		return false, nil
 	}
 	for _, d := range deployments.Items {
-		if d.Status.Replicas != 0 {
+		if !deploymentReplicasAtZero(d) {
 			return false, nil
 		}
 	}

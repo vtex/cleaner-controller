@@ -4,7 +4,9 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/utils/pointer"
 )
 
 func newTestService() *unstructured.Unstructured {
@@ -104,4 +106,30 @@ func TestReadIdleSince(t *testing.T) {
 			t.Fatalf("readIdleSince() error = nil, want error for malformed timestamp")
 		}
 	})
+}
+
+func TestDeploymentReplicasAtZero(t *testing.T) {
+	cases := []struct {
+		name           string
+		specReplicas   *int32
+		statusReplicas int32
+		want           bool
+	}{
+		{name: "fully idle", specReplicas: pointer.Int32(0), statusReplicas: 0, want: true},
+		{name: "nil spec treated as zero", specReplicas: nil, statusReplicas: 0, want: true},
+		{name: "cold start spec scaled up status pending", specReplicas: pointer.Int32(1), statusReplicas: 0, want: false},
+		{name: "scale down in progress", specReplicas: pointer.Int32(0), statusReplicas: 1, want: false},
+		{name: "running", specReplicas: pointer.Int32(2), statusReplicas: 2, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dep := appsv1.Deployment{
+				Spec:   appsv1.DeploymentSpec{Replicas: tc.specReplicas},
+				Status: appsv1.DeploymentStatus{Replicas: tc.statusReplicas},
+			}
+			if got := deploymentReplicasAtZero(dep); got != tc.want {
+				t.Errorf("deploymentReplicasAtZero() = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }

@@ -1,0 +1,111 @@
+views {
+  view index {
+    title 'cleaner-controller — System Context'
+    description '''
+      Two independent cleanup paths run in the same operator:
+
+      **ConditionalTTL** — age-based (TTL since creation) + optional CEL.
+      Deletes arbitrary targets, Helm releases, and emits CloudEvents.
+
+      **Idle Knative cleanup** — opt-in, activity-based.
+      Deletes Knative Services that stayed at zero replicas for the threshold.
+    '''
+    include *
+  }
+
+  view whatGetsDeleted {
+    title 'What cleaner-controller deletes'
+    description '''
+      | Mechanism | Trigger | What is removed |
+      |---|---|---|
+      | ConditionalTTL | `creationTimestamp + spec.ttl` and CEL conditions met | Label-selected K8s objects, Helm release, then the CR itself |
+      | Idle cleanup | `min-scale=0`, all Deployments at spec=0 & status=0, idle ≥ threshold | Knative `Service` only |
+
+      Idle cleanup does **not** use object age. A release created months ago is only removed after a **continuous** idle window.
+    '''
+    include platformEngineer
+    include cleanerController.manager.conditionalTTLReconciler
+    include cleanerController.manager.idleKnativeReconciler
+    include kubernetes.conditionalTTLCR
+    include kubernetes.arbitraryTarget
+    include kubernetes.helmRelease
+    include kubernetes.knativeService
+    include kubernetes.knativeDeployment
+    include cloudEventsSink
+  }
+
+  view conditionalTTLComponents {
+    title 'ConditionalTTL — reconcile flow'
+    include cleanerController.manager.conditionalTTLReconciler
+    include cleanerController.manager.conditionalTTLReconciler.reconcileLoop
+    include cleanerController.manager.conditionalTTLReconciler.celEvaluator
+    include cleanerController.manager.conditionalTTLReconciler.targetFinalizer
+    include cleanerController.manager.conditionalTTLReconciler.releaseFinalizer
+    include cleanerController.manager.conditionalTTLReconciler.cloudEventFinalizer
+    include kubernetes.conditionalTTLCR
+    include kubernetes.arbitraryTarget
+    include kubernetes.helmRelease
+    include cloudEventsSink
+  }
+
+  view idleCleanupComponents {
+    title 'Idle Knative cleanup — reconcile flow'
+    description '''
+      **Candidate** when ALL hold:
+      - `autoscaling.knative.dev/min-scale: "0"`
+      - no `cleaner.vtex.io/exclude: "true"`
+      - at least one Deployment exists
+      - every Deployment has `spec.replicas == 0` **and** `status.replicas == 0`
+
+      **Not a candidate** during cold start (`spec.replicas > 0`, `status.replicas == 0`).
+    '''
+    include tenantTraffic
+    include cleanerController.manager.idleKnativeReconciler
+    include cleanerController.manager.idleKnativeReconciler.idleDetector
+    include cleanerController.manager.idleKnativeReconciler.idleAnnotator
+    include cleanerController.manager.idleKnativeReconciler.idleDeleter
+    include kubernetes.knativeService
+    include kubernetes.knativeDeployment
+  }
+
+  dynamic view idleTimerReset {
+    title 'Idle timer — scale-up resets the 12h clock'
+    description '''
+      Example with `IDLE_KNATIVE_CLEANUP_THRESHOLD=12h`:
+
+      1. Service scales to zero → `idle-since` stamped at T0
+      2. At T0+3h traffic arrives → spec scales to 1 → `idle-since` **cleared**
+      3. Later scales back to zero → **new** `idle-since` at T1
+      4. Deletion only after T1+12h of **continuous** idle
+
+      The 3 hours at zero before the scale-up do **not** count toward deletion.
+    '''
+    variant sequence
+
+    tenantTraffic -> kubernetes.knativeService 'request at T0+3h'
+    kubernetes.knativeService -> kubernetes.knativeDeployment 'autoscaler sets spec.replicas=1'
+    kubernetes.knativeDeployment -> cleanerController.manager.idleKnativeReconciler.idleDetector 'deployment watch'
+    cleanerController.manager.idleKnativeReconciler.idleDetector -> cleanerController.manager.idleKnativeReconciler.idleAnnotator 'not idle (spec>0)'
+    cleanerController.manager.idleKnativeReconciler.idleAnnotator -> kubernetes.knativeService 'clear idle-since'
+
+    kubernetes.knativeDeployment -> cleanerController.manager.idleKnativeReconciler.idleDetector 'all Deployments spec=0 status=0'
+    cleanerController.manager.idleKnativeReconciler.idleDetector -> cleanerController.manager.idleKnativeReconciler.idleAnnotator 'candidate'
+    cleanerController.manager.idleKnativeReconciler.idleAnnotator -> kubernetes.knativeService 'stamp idle-since (new T1)'
+
+    cleanerController.manager.idleKnativeReconciler.idleAnnotator -> cleanerController.manager.idleKnativeReconciler.idleDeleter 'after threshold from T1'
+    cleanerController.manager.idleKnativeReconciler.idleDeleter -> kubernetes.knativeService 'delete Service'
+  }
+
+  dynamic view idleContinuousDeletion {
+    title 'Idle cleanup — continuous 12h at zero deletes'
+    variant sequence
+
+    kubernetes.knativeDeployment -> cleanerController.manager.idleKnativeReconciler.idleDetector 'spec=0, status=0'
+    cleanerController.manager.idleKnativeReconciler.idleDetector -> cleanerController.manager.idleKnativeReconciler.idleAnnotator 'mark idle'
+    cleanerController.manager.idleKnativeReconciler.idleAnnotator -> kubernetes.knativeService 'idle-since = now'
+
+    cleanerController.manager.idleKnativeReconciler.idleAnnotator -> cleanerController.manager.idleKnativeReconciler.idleDeleter 'requeue after threshold'
+    cleanerController.manager.idleKnativeReconciler.idleDeleter -> kubernetes.knativeService 'still idle?'
+    cleanerController.manager.idleKnativeReconciler.idleDeleter -> kubernetes.knativeService 'delete Service'
+  }
+}

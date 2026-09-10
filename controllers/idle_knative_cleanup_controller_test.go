@@ -117,12 +117,46 @@ var _ = Describe("IdleKnativeCleanup controller", func() {
 
 		foundDep := &appsv1.Deployment{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: depName, Namespace: ConditionalTTLNamespace}, foundDep)).To(Succeed())
+		foundDep.Spec.Replicas = pointer.Int32(1)
 		foundDep.Status.Replicas = 1
+		Expect(k8sClient.Update(ctx, foundDep)).To(Succeed())
 		Expect(k8sClient.Status().Update(ctx, foundDep)).To(Succeed())
 
 		Eventually(func() (string, error) {
 			return getIdleSinceAnnotation(name)
 		}, timeout, interval).Should(BeEmpty())
+	})
+
+	It("clears idle-since during a cold start when spec scales up before status", func() {
+		name := "idle-cold-start"
+		depName := name + "-deployment"
+		Expect(k8sClient.Create(ctx, buildIdleKnativeService(name, true, false))).To(Succeed())
+		Expect(k8sClient.Create(ctx, buildIdleDeployment(depName, name, 0))).To(Succeed())
+
+		Eventually(func() (string, error) {
+			return getIdleSinceAnnotation(name)
+		}, timeout, interval).ShouldNot(BeEmpty())
+
+		foundDep := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: depName, Namespace: ConditionalTTLNamespace}, foundDep)).To(Succeed())
+		foundDep.Spec.Replicas = pointer.Int32(1)
+		Expect(k8sClient.Update(ctx, foundDep)).To(Succeed())
+
+		Eventually(func() (string, error) {
+			return getIdleSinceAnnotation(name)
+		}, timeout, interval).Should(BeEmpty())
+	})
+
+	It("does not mark idle when deployment spec requests replicas during cold start", func() {
+		name := "idle-cold-start-pending"
+		dep := buildIdleDeployment(name+"-deployment", name, 1)
+		dep.Status.Replicas = 0
+		Expect(k8sClient.Create(ctx, buildIdleKnativeService(name, true, false))).To(Succeed())
+		Expect(k8sClient.Create(ctx, dep)).To(Succeed())
+
+		Consistently(func() (string, error) {
+			return getIdleSinceAnnotation(name)
+		}, duration, interval).Should(BeEmpty())
 	})
 
 	It("never marks an excluded Service as idle", func() {
