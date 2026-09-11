@@ -1,0 +1,178 @@
+specification {
+  // VTEX brand palette — https://vtex.com/en-us/brand-guidelines/
+  color vtexPink #F71963
+  color vtexBlack #142032
+  color vtexGray #787C89
+  color vtexCoolGray #C3C6CC
+  color vtexSoftBlue #F5F9FF
+  color vtexGreen #2E7D32
+  color vtexRed #C62828
+  color vtexAmber #F9A825
+
+  element person {
+    style {
+      shape person
+      color vtexCoolGray
+      size xs
+    }
+  }
+  element softwareSystem
+  element container
+  element component
+}
+
+model {
+  platformEngineer = person 'Platform Engineer' 'Creates ConditionalTTL CRs and enables idle cleanup per cluster' {
+    style {
+      icon tech:javascript
+    }
+  }
+
+  tenantTraffic = person 'Tenant traffic' 'HTTP requests that may scale a Knative Service up from zero' {
+    style {
+      icon tech:javascript
+    }
+  }
+
+  cleanerController = softwareSystem 'cleaner-controller' 'Kubernetes operator that deletes resources after TTL expiry or prolonged scale-to-zero idle time' {
+    style {
+      color vtexBlack
+      icon tech:kubernetes
+    }
+
+    manager = container 'Manager Pod' 'controller-runtime manager; registers reconcilers based on env vars' 'Go' {
+      style {
+        color vtexBlack
+        icon tech:go
+      }
+
+      conditionalTTLReconciler = component 'ConditionalTTLReconciler' 'Watches ConditionalTTL CRs. After spec.ttl from creationTimestamp and optional CEL conditions, deletes targets, uninstalls Helm releases, and emits CloudEvents' 'Go' {
+        style {
+          color vtexBlack
+          icon tech:go
+        }
+
+        celEvaluator = component 'custom_cel' 'Compiles and evaluates CEL conditions against resolved targets' 'Go, CEL' {
+          style {
+            color vtexGray
+          }
+        }
+
+        targetFinalizer = component 'target-finalizer' 'Deletes label-selected Kubernetes objects listed in spec.targets' 'Go' {
+          style {
+            color vtexRed
+          }
+        }
+
+        releaseFinalizer = component 'release-finalizer' 'Uninstalls Helm releases referenced in spec.release' 'Go, Helm SDK' {
+          style {
+            color vtexRed
+          }
+        }
+
+        cloudEventFinalizer = component 'cloud-event-finalizer' 'Sends a CloudEvent before the ConditionalTTL object is removed' 'Go, CloudEvents' {
+          style {
+            color vtexAmber
+          }
+        }
+
+        reconcileLoop = component 'Reconcile loop' 'TTL expiry gate, then CEL evaluation, then finalizers in order' 'Go' {
+          style {
+            color vtexBlack
+          }
+        }
+
+        reconcileLoop -> celEvaluator 'evaluates conditions'
+        reconcileLoop -> targetFinalizer 'deletes matched resources'
+        reconcileLoop -> releaseFinalizer 'helm uninstall'
+        reconcileLoop -> cloudEventFinalizer 'notify downstream'
+      }
+
+      idleKnativeReconciler = component 'IdleKnativeCleanupReconciler' 'Opt-in via IDLE_KNATIVE_CLEANUP_ENABLED. Deletes Knative Services with min-scale=0 that stayed fully scaled to zero for IDLE_KNATIVE_CLEANUP_THRESHOLD (default 12h). Tracks idle time with cleaner.vtex.io/idle-since; resets on scale-up.' 'Go' {
+        style {
+          color vtexBlack
+          icon tech:go
+        }
+
+        idleDetector = component 'idle detector' 'Requires min-scale=0, no cleaner.vtex.io/exclude, and every owned Deployment with spec.replicas=0 AND status.replicas=0' 'Go' {
+          style {
+            color vtexGray
+          }
+        }
+
+        idleAnnotator = component 'idle-since annotator' 'Stamps cleaner.vtex.io/idle-since when idle starts; clears it on reactivation or cold start (spec>0)' 'Go' {
+          style {
+            color vtexAmber
+          }
+        }
+
+        idleDeleter = component 'idle deleter' 'Deletes the Knative Service once idle-since + threshold elapsed' 'Go' {
+          style {
+            color vtexRed
+          }
+        }
+
+        idleDetector -> idleAnnotator 'stamp / clear idle-since'
+        idleAnnotator -> idleDeleter 'delete after threshold'
+      }
+    }
+  }
+
+  kubernetes = softwareSystem 'Kubernetes API' 'Cluster state: CRDs, Deployments, Knative Services, Helm secrets' {
+    style {
+      color vtexGray
+      icon tech:kubernetes
+    }
+
+    conditionalTTLCR = component 'ConditionalTTL CR' 'cleaner.vtex.io/v1alpha1 — defines TTL, targets, optional CEL, Helm release, CloudEvent' {
+      style {
+        color vtexSoftBlue
+      }
+    }
+
+    knativeService = component 'Knative Service' 'serving.knative.dev/v1 Service — deleted by idle cleanup when abandoned at zero' {
+      style {
+        color vtexRed
+      }
+    }
+
+    knativeDeployment = component 'Knative Deployment' 'apps/v1 Deployment labeled serving.knative.dev/service=<name> — watched to detect idle vs cold start' {
+      style {
+        color vtexGray
+      }
+    }
+
+    arbitraryTarget = component 'Target resources' 'Any API object matched by a ConditionalTTL label selector — deleted by target-finalizer' {
+      style {
+        color vtexRed
+      }
+    }
+
+    helmRelease = component 'Helm release' 'Release tracked in cluster secrets — uninstalled by release-finalizer' {
+      style {
+        color vtexRed
+      }
+    }
+  }
+
+  cloudEventsSink = softwareSystem 'CloudEvents sink' 'Receives cleanup notifications from ConditionalTTL' {
+    style {
+      color vtexAmber
+      icon tech:kafka
+    }
+  }
+
+  platformEngineer -> cleanerController.manager.conditionalTTLReconciler 'creates ConditionalTTL CRs'
+  platformEngineer -> cleanerController.manager.idleKnativeReconciler 'sets IDLE_KNATIVE_CLEANUP_ENABLED / THRESHOLD'
+
+  cleanerController.manager.conditionalTTLReconciler -> kubernetes.conditionalTTLCR 'watch / update status'
+  cleanerController.manager.conditionalTTLReconciler -> kubernetes.arbitraryTarget 'delete after TTL + conditions'
+  cleanerController.manager.conditionalTTLReconciler -> kubernetes.helmRelease 'helm uninstall'
+  cleanerController.manager.conditionalTTLReconciler -> cloudEventsSink 'POST CloudEvent'
+
+  cleanerController.manager.idleKnativeReconciler -> kubernetes.knativeService 'watch / patch idle-since / delete'
+  cleanerController.manager.idleKnativeReconciler -> kubernetes.knativeDeployment 'watch scale state'
+
+  tenantTraffic -> kubernetes.knativeService 'traffic may scale from zero'
+  kubernetes.knativeService -> kubernetes.knativeDeployment 'owns Deployments'
+}

@@ -1,0 +1,12 @@
+{
+  "name": "cleaner-controller-architecture",
+  "private": true,
+  "scripts": {
+    "start": "likec4 start",
+    "build": "likec4 build -o dist",
+    "export": "likec4 export png -o images"
+  },
+  "devDependencies": {
+    "likec4": "^1"
+  }
+}

@@ -19,6 +19,8 @@ package main
 import (
 	"flag"
 	"os"
+	"time"
+
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -123,6 +125,27 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ConditionalTTL")
 		os.Exit(1)
+	}
+
+	if os.Getenv("IDLE_KNATIVE_CLEANUP_ENABLED") == "true" {
+		thresholdStr := os.Getenv("IDLE_KNATIVE_CLEANUP_THRESHOLD")
+		if thresholdStr == "" {
+			thresholdStr = "12h"
+		}
+		threshold, err := time.ParseDuration(thresholdStr)
+		if err != nil {
+			setupLog.Error(err, "invalid IDLE_KNATIVE_CLEANUP_THRESHOLD", "value", thresholdStr)
+			os.Exit(1)
+		}
+		if err = (&controllers.IdleKnativeCleanupReconciler{
+			Client:    mgr.GetClient(),
+			Scheme:    mgr.GetScheme(),
+			Recorder:  mgr.GetEventRecorderFor("cleaner-controller"),
+			Threshold: threshold,
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "IdleKnativeCleanup")
+			os.Exit(1)
+		}
 	}
 	//+kubebuilder:scaffold:builder
 
