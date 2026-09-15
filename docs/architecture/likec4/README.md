@@ -12,7 +12,9 @@ DSL (`model.c4`, `views.c4`).
 | **`index`** | System context: both cleanup mechanisms and external dependencies |
 | **`whatGetsDeleted`** | Side-by-side comparison of what each mechanism removes |
 | **`conditionalTTLComponents`** | ConditionalTTL reconciler: CEL, target/release/cloud-event finalizers |
-| **`idleCleanupComponents`** | Idle cleanup: detector, `idle-since` annotator, deleter |
+| **`idleCleanupComponents`** | Idle cleanup: watch enqueue, reconcile loop, detector, `idle-since` annotator, deleter |
+| **`hardLimitCleanupComponents`** | Hard-limit cleanup: watch, detector, deleter -- consumes the annotation faststore-proxy-launcher's release limiter writes (PR #760/#761), opt-in via `HARD_LIMIT_CLEANUP_ENABLED` |
+| **`idleSinceStampTrigger`** | Sequence: **what triggers Reconcile** (Service or Deployment watch) and the exact moment `idle-since` is PATCHed |
 | **`idleTimerReset`** | Sequence: scale-up at 3h **resets** the clock; deletion only after 12h of a **new** continuous idle period |
 | **`idleContinuousDeletion`** | Sequence: uninterrupted 12h at zero → delete |
 

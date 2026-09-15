@@ -94,6 +94,18 @@ model {
           icon tech:go
         }
 
+        watchEnqueue = component 'watch enqueue' 'SetupWithManager registers For(Knative Service) and Watches(Deployment). mapDeploymentToService reads serving.knative.dev/service and enqueues the owning Service.' 'Go, controller-runtime' {
+          style {
+            color vtexBlack
+          }
+        }
+
+        reconcileLoop = component 'Reconcile loop' 'Runs on every enqueue. Gets the Service, evaluates idle state, patches idle-since, requeues or deletes.' 'Go' {
+          style {
+            color vtexBlack
+          }
+        }
+
         idleDetector = component 'idle detector' 'Requires min-scale=0, no cleaner.vtex.io/exclude, and every owned Deployment with spec.replicas=0 AND status.replicas=0' 'Go' {
           style {
             color vtexGray
@@ -112,8 +124,38 @@ model {
           }
         }
 
+        watchEnqueue -> reconcileLoop 'enqueue reconcile.Request'
+        reconcileLoop -> idleDetector 'evaluate candidate'
         idleDetector -> idleAnnotator 'stamp / clear idle-since'
         idleAnnotator -> idleDeleter 'delete after threshold'
+      }
+
+      hardLimitReconciler = component 'HardLimitCleanupReconciler' 'Opt-in via HARD_LIMIT_CLEANUP_ENABLED. Watches Knative Configurations for cleaner.vtex.io/hard-limit-exceeded=true (written externally by faststore-proxy-launcher release limiter, PR #760/#761, when a tenant exceeds their active-release cap) and deletes the marked release.' 'Go' {
+        style {
+          color vtexBlack
+          icon tech:go
+        }
+
+        hardLimitWatch = component 'watch enqueue' 'Registers For(Knative Configuration), reconciling whenever its annotations change' 'Go, controller-runtime' {
+          style {
+            color vtexBlack
+          }
+        }
+
+        hardLimitDetector = component 'hard-limit detector' 'Checks for cleaner.vtex.io/hard-limit-exceeded=true; no-ops otherwise' 'Go' {
+          style {
+            color vtexGray
+          }
+        }
+
+        hardLimitDeleter = component 'hard-limit deleter' 'Two release shapes: ksvc-owned (Configuration has an owning Service) deletes the Service, cascading to Configuration+Route automatically; standalone Configuration+Route (no owning Service, e.g. kobeio) deletes both explicitly, skipping any Route whose traffic is split with a sibling Configuration to avoid cutting its live traffic. proxy-launcher never deletes anything itself.' 'Go' {
+          style {
+            color vtexRed
+          }
+        }
+
+        hardLimitWatch -> hardLimitDetector 'evaluate annotation'
+        hardLimitDetector -> hardLimitDeleter 'marked -> delete'
       }
     }
   }
@@ -130,7 +172,19 @@ model {
       }
     }
 
-    knativeService = component 'Knative Service' 'serving.knative.dev/v1 Service — deleted by idle cleanup when abandoned at zero' {
+    knativeService = component 'Knative Service' 'serving.knative.dev/v1 Service — deleted by idle cleanup when abandoned at zero, or by hard-limit cleanup for a ksvc-owned release' {
+      style {
+        color vtexRed
+      }
+    }
+
+    knativeConfiguration = component 'Knative Configuration' 'serving.knative.dev/v1 Configuration — always present (ksvc child or standalone); annotated by proxy-launcher and watched/deleted by hard-limit cleanup' {
+      style {
+        color vtexRed
+      }
+    }
+
+    knativeRoute = component 'Knative Route' 'serving.knative.dev/v1 Route — deleted by hard-limit cleanup only for a standalone release, and only if its traffic is not split with a sibling Configuration' {
       style {
         color vtexRed
       }
@@ -162,6 +216,13 @@ model {
     }
   }
 
+  proxyLauncher = softwareSystem 'faststore-proxy-launcher' 'Helm release admission service (separate repo). Its release limiter marks the oldest release for a tenant that exceeds their active-release cap, rather than deleting it directly.' {
+    style {
+      color vtexGray
+      icon tech:go
+    }
+  }
+
   platformEngineer -> cleanerController.manager.conditionalTTLReconciler 'creates ConditionalTTL CRs'
   platformEngineer -> cleanerController.manager.idleKnativeReconciler 'sets IDLE_KNATIVE_CLEANUP_ENABLED / THRESHOLD'
 
@@ -172,6 +233,11 @@ model {
 
   cleanerController.manager.idleKnativeReconciler -> kubernetes.knativeService 'watch / patch idle-since / delete'
   cleanerController.manager.idleKnativeReconciler -> kubernetes.knativeDeployment 'watch scale state'
+
+  proxyLauncher -> kubernetes.knativeConfiguration 'PATCH cleaner.vtex.io/hard-limit-exceeded / -reason / -tenant / -marked-at (Configuration if standalone, owning Service if ksvc-owned -- Knative propagates it back down)'
+  cleanerController.manager.hardLimitReconciler -> kubernetes.knativeConfiguration 'watch annotation'
+  cleanerController.manager.hardLimitReconciler -> kubernetes.knativeService 'delete (ksvc-owned release)'
+  cleanerController.manager.hardLimitReconciler -> kubernetes.knativeRoute 'delete (standalone release, non-split traffic only)'
 
   tenantTraffic -> kubernetes.knativeService 'traffic may scale from zero'
   kubernetes.knativeService -> kubernetes.knativeDeployment 'owns Deployments'

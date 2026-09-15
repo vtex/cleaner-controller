@@ -48,6 +48,16 @@ rules:
 - apiGroups:
   - serving.knative.dev
   resources:
+  - configurations
+  - routes
+  verbs:
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - serving.knative.dev
+  resources:
   - services
   verbs:
   - delete

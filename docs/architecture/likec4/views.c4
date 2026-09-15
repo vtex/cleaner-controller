@@ -20,18 +20,24 @@ views {
       |---|---|---|
       | ConditionalTTL | `creationTimestamp + spec.ttl` and CEL conditions met | Label-selected K8s objects, Helm release, then the CR itself |
       | Idle cleanup | `min-scale=0`, all Deployments at spec=0 & status=0, idle ≥ threshold | Knative `Service` only |
+      | Hard-limit cleanup | `cleaner.vtex.io/hard-limit-exceeded` annotation, written externally by faststore-proxy-launcher | ksvc-owned: the owning `Service`. Standalone: the `Configuration` and any `Route` not shared with a sibling Configuration |
 
       Idle cleanup does **not** use object age. A release created months ago is only removed after a **continuous** idle window.
+
+      Hard-limit cleanup is opt-in via `HARD_LIMIT_CLEANUP_ENABLED`, consuming the annotation contract from faststore-proxy-launcher PR #760/#761.
     '''
     include platformEngineer
     include cleanerController.manager.conditionalTTLReconciler
     include cleanerController.manager.idleKnativeReconciler
+    include cleanerController.manager.hardLimitReconciler
     include kubernetes.conditionalTTLCR
     include kubernetes.arbitraryTarget
     include kubernetes.helmRelease
     include kubernetes.knativeService
+    include kubernetes.knativeConfiguration
     include kubernetes.knativeDeployment
     include cloudEventsSink
+    include proxyLauncher
   }
 
   view conditionalTTLComponents {
@@ -61,11 +67,88 @@ views {
     '''
     include tenantTraffic
     include cleanerController.manager.idleKnativeReconciler
+    include cleanerController.manager.idleKnativeReconciler.watchEnqueue
+    include cleanerController.manager.idleKnativeReconciler.reconcileLoop
     include cleanerController.manager.idleKnativeReconciler.idleDetector
     include cleanerController.manager.idleKnativeReconciler.idleAnnotator
     include cleanerController.manager.idleKnativeReconciler.idleDeleter
     include kubernetes.knativeService
     include kubernetes.knativeDeployment
+  }
+
+  view hardLimitCleanupComponents {
+    title 'Hard-limit cleanup — reconcile flow'
+    description '''
+      Opt-in via `HARD_LIMIT_CLEANUP_ENABLED`, consuming the annotation
+      contract from faststore-proxy-launcher PR #760/#761.
+
+      **The handoff:** faststore-proxy-launcher's release limiter decides
+      when a tenant exceeds their active-release cap and PATCHes the
+      oldest offending release (its Configuration if standalone, its
+      owning Service if ksvc-owned -- Knative propagates the annotation
+      back down onto the Configuration on its own next reconcile) with:
+
+      - `cleaner.vtex.io/hard-limit-exceeded: "true"`
+      - `cleaner.vtex.io/hard-limit-reason` — currently always `tenant_limit_exceeded`
+      - `cleaner.vtex.io/hard-limit-tenant`
+      - `cleaner.vtex.io/hard-limit-marked-at` — RFC3339 timestamp
+
+      **This reconciler watches Configurations** (present for every
+      release, ksvc-owned or standalone) and, once marked, deletes:
+
+      - ksvc-owned: the owning **Service** — cascades to its Configuration
+        and Route automatically via Knative's own ownerReferences.
+      - standalone: the **Configuration**, plus any **Route** whose
+        traffic points *exclusively* at it. A Route split across multiple
+        Configurations (e.g. an in-progress canary) is left alone, since
+        deleting it would cut live traffic to a sibling release this
+        reconciler was never asked to remove.
+
+      proxy-launcher never deletes anything itself -- annotating is a
+      pure metadata write.
+    '''
+    include proxyLauncher
+    include cleanerController.manager.hardLimitReconciler
+    include cleanerController.manager.hardLimitReconciler.hardLimitWatch
+    include cleanerController.manager.hardLimitReconciler.hardLimitDetector
+    include cleanerController.manager.hardLimitReconciler.hardLimitDeleter
+    include kubernetes.knativeService
+    include kubernetes.knativeConfiguration
+    include kubernetes.knativeRoute
+  }
+
+  dynamic view idleSinceStampTrigger {
+    title 'When idle-since is stamped — watches and reconcile trigger'
+    description '''
+      `idle-since` is set on the **first Reconcile** where the Service becomes a
+      candidate and the annotation is still absent.
+
+      **What triggers Reconcile:**
+      - any change to the Knative Service (`For` watch), or
+      - any change to a Deployment labeled `serving.knative.dev/service=<name>`
+        (`Watches` + `mapDeploymentToService`)
+
+      **Typical stamp moment:** the last Deployment finishes scale-to-zero
+      (`spec.replicas=0`, `status.replicas=0`) → Deployment watch fires →
+      Reconcile → detector approves → annotator PATCHes `idle-since=now`.
+    '''
+    variant sequence
+
+    alt 'what enqueued Reconcile?' {
+      when 'Knative Service changed' {
+        kubernetes.knativeService -> cleanerController.manager.idleKnativeReconciler.watchEnqueue 'watch: For(Service)'
+        cleanerController.manager.idleKnativeReconciler.watchEnqueue -> cleanerController.manager.idleKnativeReconciler.reconcileLoop 'enqueue Request'
+      }
+      else 'Deployment scale changed' {
+        kubernetes.knativeDeployment -> cleanerController.manager.idleKnativeReconciler.watchEnqueue 'watch: Watches(Deployment)'
+        cleanerController.manager.idleKnativeReconciler.watchEnqueue -> cleanerController.manager.idleKnativeReconciler.reconcileLoop 'mapDeploymentToService → enqueue owning Service'
+      }
+    }
+
+    cleanerController.manager.idleKnativeReconciler.reconcileLoop -> cleanerController.manager.idleKnativeReconciler.idleDetector 'Get Service; check min-scale, exclude, Deployments'
+    cleanerController.manager.idleKnativeReconciler.idleDetector -> cleanerController.manager.idleKnativeReconciler.idleAnnotator 'candidate && idle-since absent'
+    cleanerController.manager.idleKnativeReconciler.idleAnnotator -> kubernetes.knativeService 'PATCH cleaner.vtex.io/idle-since = now (RFC3339)'
+    cleanerController.manager.idleKnativeReconciler.idleAnnotator -> cleanerController.manager.idleKnativeReconciler.idleDeleter 'RequeueAfter(threshold); emit IdleServiceMarked'
   }
 
   dynamic view idleTimerReset {
