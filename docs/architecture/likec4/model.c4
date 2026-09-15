@@ -148,14 +148,21 @@ model {
           }
         }
 
-        hardLimitDeleter = component 'hard-limit deleter' 'Two release shapes: ksvc-owned (Configuration has an owning Service) deletes the Service, cascading to Configuration+Route automatically; standalone Configuration+Route (no owning Service, e.g. acmecorp) deletes both explicitly, skipping any Route whose traffic is split with a sibling Configuration to avoid cutting its live traffic. proxy-launcher never deletes anything itself.' 'Go' {
+        hardLimitRouteGuard = component 'route reference guard' 'Lists every Route in the namespace before anything is deleted. Found live on dr0: a tenants stable "current production" Route (unrelated to any one release own ksvc) kept pointing at a Configuration after its owning Service was deleted, since that only cascades to the Route the Service itself owns -- the alias Route survived but broke. Now any Route referencing the marked Configuration -- owned by its ksvc or not -- blocks the deletion entirely.' 'Go' {
+          style {
+            color vtexAmber
+          }
+        }
+
+        hardLimitDeleter = component 'hard-limit deleter' 'Two release shapes, only once the route guard clears: ksvc-owned (Configuration has an owning Service) deletes the Service, cascading to Configuration+Route automatically; standalone Configuration+Route (no owning Service, e.g. acmecorp) deletes both explicitly. proxy-launcher never deletes anything itself.' 'Go' {
           style {
             color vtexRed
           }
         }
 
         hardLimitWatch -> hardLimitDetector 'evaluate annotation'
-        hardLimitDetector -> hardLimitDeleter 'marked -> delete'
+        hardLimitDetector -> hardLimitRouteGuard 'marked -> check route references'
+        hardLimitRouteGuard -> hardLimitDeleter 'no external/split reference -> delete'
       }
     }
   }
@@ -184,7 +191,7 @@ model {
       }
     }
 
-    knativeRoute = component 'Knative Route' 'serving.knative.dev/v1 Route — deleted by hard-limit cleanup only for a standalone release, and only if its traffic is not split with a sibling Configuration' {
+    knativeRoute = component 'Knative Route' 'serving.knative.dev/v1 Route — listed by hard-limit cleanup before every deletion decision (any Route referencing the marked Configuration blocks it); deleted itself only for a standalone release, and only if its traffic is not split with a sibling Configuration' {
       style {
         color vtexRed
       }

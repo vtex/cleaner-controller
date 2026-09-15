@@ -20,7 +20,7 @@ views {
       |---|---|---|
       | ConditionalTTL | `creationTimestamp + spec.ttl` and CEL conditions met | Label-selected K8s objects, Helm release, then the CR itself |
       | Idle cleanup | `min-scale=0`, all Deployments at spec=0 & status=0, idle ≥ threshold | Knative `Service` only |
-      | Hard-limit cleanup | `cleaner.vtex.io/hard-limit-exceeded` annotation, written externally by faststore-proxy-launcher | ksvc-owned: the owning `Service`. Standalone: the `Configuration` and any `Route` not shared with a sibling Configuration |
+      | Hard-limit cleanup | `cleaner.vtex.io/hard-limit-exceeded` annotation, written externally by faststore-proxy-launcher -- only if no Route (owned by its ksvc or not) still references it | ksvc-owned: the owning `Service`. Standalone: the `Configuration` and any `Route` not shared with a sibling Configuration |
 
       Idle cleanup does **not** use object age. A release created months ago is only removed after a **continuous** idle window.
 
@@ -94,15 +94,25 @@ views {
       - `cleaner.vtex.io/hard-limit-marked-at` — RFC3339 timestamp
 
       **This reconciler watches Configurations** (present for every
-      release, ksvc-owned or standalone) and, once marked, deletes:
+      release, ksvc-owned or standalone). Once marked, it first lists
+      every Route in the namespace and checks which reference it, then
+      deletes only if none of them would break:
 
-      - ksvc-owned: the owning **Service** — cascades to its Configuration
-        and Route automatically via Knative's own ownerReferences.
-      - standalone: the **Configuration**, plus any **Route** whose
-        traffic points *exclusively* at it. A Route split across multiple
-        Configurations (e.g. an in-progress canary) is left alone, since
-        deleting it would cut live traffic to a sibling release this
-        reconciler was never asked to remove.
+      - ksvc-owned: safe only if no Route *other than the one the Service
+        itself owns* references it. Then deletes the owning **Service**,
+        cascading to its own Configuration and Route via Knative's own
+        ownerReferences.
+      - standalone: safe only if no referencing Route splits traffic with
+        another Configuration. Then deletes the **Configuration**, plus
+        any Route whose traffic pointed exclusively at it.
+
+      **Found live on dr0:** a tenant's stable "current production" Route
+      (unrelated to any one release's own ksvc) kept referencing a
+      Configuration after this reconciler deleted its owning Service --
+      deleting a Service only cascades to the Route *it* owns, not to
+      unrelated Routes elsewhere. The alias Route survived, but broke
+      (its target was gone). The route reference guard exists because of
+      that incident.
 
       proxy-launcher never deletes anything itself -- annotating is a
       pure metadata write.
@@ -111,6 +121,7 @@ views {
     include cleanerController.manager.hardLimitReconciler
     include cleanerController.manager.hardLimitReconciler.hardLimitWatch
     include cleanerController.manager.hardLimitReconciler.hardLimitDetector
+    include cleanerController.manager.hardLimitReconciler.hardLimitRouteGuard
     include cleanerController.manager.hardLimitReconciler.hardLimitDeleter
     include kubernetes.knativeService
     include kubernetes.knativeConfiguration

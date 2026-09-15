@@ -52,21 +52,37 @@ var (
 // the other half of that cross-repo contract: it watches for the
 // annotation and performs the actual deletion.
 //
-// Two release shapes exist, and they're cleaned up differently:
+// The one invariant that overrides everything else: never delete a
+// Configuration that any Route still sends live traffic to, regardless of
+// who owns that Route. Found live on dr0 -- a tenant's stable "current
+// production" Route (unrelated to any single release's own ksvc, created
+// separately to alias whichever Configuration is current) kept pointing
+// at a Configuration after this reconciler deleted it, since deleting the
+// owning Service only cascades to the Route *that Service itself owns*.
+// The alias Route survived, but broke (Ready: False, "Configuration ...
+// not found") -- an outage that eviction was never supposed to cause; the
+// entire point of proxy-launcher's limiter is to stay best-effort and
+// never break something live (see its Admit doc comment).
+//
+// So before deleting anything, this always lists every Route in the
+// namespace and checks which ones reference the marked Configuration.
+// Two release shapes exist, cleaned up differently once that's clear:
 //
 //   - ksvc-owned: the Configuration has an ownerReference to a Knative
 //     Service. Deleting the Service cascades to both its Configuration
-//     and Route automatically (Knative sets an ownerReference from each
-//     onto the Service -- see knative.dev/serving's
-//     pkg/reconciler/service/resources/{configuration,route}.go), so this
-//     deletes the Service and nothing else.
+//     and its own Route automatically (Knative sets an ownerReference
+//     from each onto the Service -- see knative.dev/serving's
+//     pkg/reconciler/service/resources/{configuration,route}.go). Safe to
+//     delete only if no *other* Route (one the Service doesn't own)
+//     references it too.
 //   - standalone Configuration+Route pair (no owning Service, e.g.
 //     acmecorp): there is no ownerReference tying them together, so this
-//     deletes both explicitly. A Route is only deleted if every one of
-//     its traffic targets points at this Configuration -- one split
-//     across multiple Configurations (e.g. an in-progress canary) is left
-//     alone, since deleting it would cut live traffic to a sibling
-//     release this reconciler was never asked to remove.
+//     deletes both explicitly -- but only the Routes whose traffic points
+//     *exclusively* at this Configuration. If any referencing Route
+//     splits traffic with another Configuration (e.g. an in-progress
+//     canary), nothing is deleted at all: deleting the Configuration
+//     would break that Route's traffic to a sibling release this
+//     reconciler was never asked to remove.
 type HardLimitCleanupReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -95,7 +111,25 @@ func (r *HardLimitCleanupReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	tenant := cfg.GetAnnotations()[hardLimitTenantAnnotation]
 	reason := cfg.GetAnnotations()[hardLimitReasonAnnotation]
 
+	refs, err := r.referencingRoutes(ctx, cfg.GetNamespace(), cfg.GetName())
+	if err != nil {
+		log.Error(err, "failed to list routes referencing the marked Configuration")
+		return ctrl.Result{}, err
+	}
+
 	if ownerName, ok := serviceOwner(cfg); ok {
+		// The Service's own Route shares its name (Knative's own naming
+		// convention) and dies with it in the cascade below -- it's not
+		// an external dependency. Anything else referencing this
+		// Configuration is.
+		external := excludeRouteNamed(refs, ownerName)
+		if len(external) > 0 {
+			r.Recorder.Eventf(cfg, corev1.EventTypeWarning, "HardLimitCleanupSkipped",
+				"not deleting Service %s: still referenced by route(s) %v outside its own ksvc -- deleting would break their live traffic",
+				ownerName, routeNames(external))
+			return ctrl.Result{}, nil
+		}
+
 		svc := &unstructured.Unstructured{}
 		svc.SetGroupVersionKind(knativeServiceGVK)
 		svc.SetName(ownerName)
@@ -110,14 +144,35 @@ func (r *HardLimitCleanupReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, nil
 	}
 
-	routes, err := r.findExclusiveRoutes(ctx, cfg.GetNamespace(), cfg.GetName())
-	if err != nil {
-		log.Error(err, "failed to list routes for standalone Configuration cleanup")
-		return ctrl.Result{}, err
+	// Standalone: split referencing routes into ones dedicated solely to
+	// this Configuration (safe to delete alongside it) and ones sharing
+	// traffic with another Configuration too (e.g. a stable alias Route,
+	// or an in-progress canary). Any of the latter blocks the whole
+	// deletion -- not just that Route -- since removing the Configuration
+	// would break its traffic regardless of whether the Route itself is
+	// touched.
+	var exclusive, shared []unstructured.Unstructured
+	for _, route := range refs {
+		targets, _, err := unstructured.NestedSlice(route.Object, "spec", "traffic")
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("reading spec.traffic for route %s: %w", route.GetName(), err)
+		}
+		if trafficTargetsOnly(targets, cfg.GetName()) {
+			exclusive = append(exclusive, route)
+		} else {
+			shared = append(shared, route)
+		}
 	}
-	for i := range routes {
-		if err := r.Delete(ctx, &routes[i]); err != nil && !apierrors.IsNotFound(err) {
-			r.Recorder.Eventf(cfg, corev1.EventTypeWarning, "HardLimitCleanupFailed", "failed to delete Route %s: %s", routes[i].GetName(), err.Error())
+	if len(shared) > 0 {
+		r.Recorder.Eventf(cfg, corev1.EventTypeWarning, "HardLimitCleanupSkipped",
+			"not deleting: still referenced by route(s) %v with traffic split to another Configuration -- deleting would break their live traffic",
+			routeNames(shared))
+		return ctrl.Result{}, nil
+	}
+
+	for i := range exclusive {
+		if err := r.Delete(ctx, &exclusive[i]); err != nil && !apierrors.IsNotFound(err) {
+			r.Recorder.Eventf(cfg, corev1.EventTypeWarning, "HardLimitCleanupFailed", "failed to delete Route %s: %s", exclusive[i].GetName(), err.Error())
 			return ctrl.Result{}, err
 		}
 	}
@@ -127,7 +182,7 @@ func (r *HardLimitCleanupReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 	r.Recorder.Eventf(cfg, corev1.EventTypeNormal, "HardLimitCleanupDeleted",
-		"deleted standalone Configuration and %d associated Route(s) (tenant=%s reason=%s)", len(routes), tenant, reason)
+		"deleted standalone Configuration and %d associated Route(s) (tenant=%s reason=%s)", len(exclusive), tenant, reason)
 	return ctrl.Result{}, nil
 }
 
@@ -144,11 +199,12 @@ func serviceOwner(cfg *unstructured.Unstructured) (name string, ok bool) {
 	return "", false
 }
 
-// findExclusiveRoutes returns every Route in namespace whose spec.traffic
-// points exclusively at configName -- never one split across multiple
-// Configurations, since deleting that would cut live traffic to whichever
-// sibling release this reconciler wasn't asked to remove.
-func (r *HardLimitCleanupReconciler) findExclusiveRoutes(ctx context.Context, namespace, configName string) ([]unstructured.Unstructured, error) {
+// referencingRoutes returns every Route in namespace with at least one
+// spec.traffic entry naming configName as its configurationName --
+// regardless of who owns the Route or whether that traffic is shared with
+// another Configuration. Deleting a Configuration any of these still
+// reference would break their live traffic.
+func (r *HardLimitCleanupReconciler) referencingRoutes(ctx context.Context, namespace, configName string) ([]unstructured.Unstructured, error) {
 	var routes unstructured.UnstructuredList
 	routes.SetGroupVersionKind(knativeRouteListGVK)
 	if err := r.List(ctx, &routes, client.InNamespace(namespace)); err != nil {
@@ -161,7 +217,7 @@ func (r *HardLimitCleanupReconciler) findExclusiveRoutes(ctx context.Context, na
 		if err != nil {
 			return nil, fmt.Errorf("reading spec.traffic for route %s: %w", route.GetName(), err)
 		}
-		if !found || !trafficTargetsOnly(targets, configName) {
+		if !found || !referencesConfig(targets, configName) {
 			continue
 		}
 		matches = append(matches, route)
@@ -169,8 +225,24 @@ func (r *HardLimitCleanupReconciler) findExclusiveRoutes(ctx context.Context, na
 	return matches, nil
 }
 
-// trafficTargetsOnly reports whether every entry in a Route's
+// referencesConfig reports whether at least one entry in a Route's
 // spec.traffic list names configName as its configurationName.
+func referencesConfig(targets []interface{}, configName string) bool {
+	for _, t := range targets {
+		m, ok := t.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if name, _, _ := unstructured.NestedString(m, "configurationName"); name == configName {
+			return true
+		}
+	}
+	return false
+}
+
+// trafficTargetsOnly reports whether every entry in a Route's
+// spec.traffic list names configName as its configurationName -- i.e.
+// none of its traffic is shared with a different Configuration.
 func trafficTargetsOnly(targets []interface{}, configName string) bool {
 	if len(targets) == 0 {
 		return false
@@ -186,6 +258,26 @@ func trafficTargetsOnly(targets []interface{}, configName string) bool {
 		}
 	}
 	return true
+}
+
+// excludeRouteNamed returns routes without the one (if any) named name.
+func excludeRouteNamed(routes []unstructured.Unstructured, name string) []unstructured.Unstructured {
+	out := make([]unstructured.Unstructured, 0, len(routes))
+	for _, r := range routes {
+		if r.GetName() != name {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// routeNames returns the names of routes, for logging/events.
+func routeNames(routes []unstructured.Unstructured) []string {
+	names := make([]string, len(routes))
+	for i, r := range routes {
+		names[i] = r.GetName()
+	}
+	return names
 }
 
 // SetupWithManager sets up the controller with the Manager.
