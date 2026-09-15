@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -29,12 +30,21 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 const (
 	hardLimitAnnotationKey    = "cleaner.vtex.io/hard-limit-exceeded"
 	hardLimitReasonAnnotation = "cleaner.vtex.io/hard-limit-reason"
 	hardLimitTenantAnnotation = "cleaner.vtex.io/hard-limit-tenant"
+
+	releaseShapeKsvc       = "ksvc"
+	releaseShapeStandalone = "standalone"
+
+	actionDeleted            = "deleted"
+	actionFailed             = "failed"
+	actionSkippedExternalRef = "skipped_external_reference"
+	actionSkippedSplitRef    = "skipped_split_reference"
 )
 
 var (
@@ -42,6 +52,25 @@ var (
 	knativeRouteGVK         = schema.GroupVersionKind{Group: "serving.knative.dev", Version: "v1", Kind: "Route"}
 	knativeRouteListGVK     = schema.GroupVersionKind{Group: "serving.knative.dev", Version: "v1", Kind: "RouteList"}
 )
+
+// hardLimitCleanupActionTotal counts every hard-limit cleanup reconcile
+// outcome, per tenant, action, and release shape -- the only way to see
+// this reconciler's behavior in Prometheus/Grafana, since it otherwise
+// only emits Kubernetes Events (visible via `kubectl describe`/`get
+// events`, not scraped by Prometheus). action is one of: deleted,
+// skipped_external_reference (a Route outside its own ksvc still
+// references it), skipped_split_reference (a standalone Route's traffic
+// is split with a sibling Configuration), failed (the delete call itself
+// errored). release_shape is ksvc or standalone -- see this reconciler's
+// own doc comment for what that distinction means.
+var hardLimitCleanupActionTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "hard_limit_cleanup_action_total",
+	Help: "Count of hard-limit cleanup reconcile outcomes, per tenant, action, and release shape.",
+}, []string{"tenant", "action", "release_shape"})
+
+func init() {
+	metrics.Registry.MustRegister(hardLimitCleanupActionTotal)
+}
 
 // HardLimitCleanupReconciler deletes Knative releases that
 // faststore-proxy-launcher's release limiter marked as exceeding their
@@ -124,6 +153,7 @@ func (r *HardLimitCleanupReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		// Configuration is.
 		external := excludeRouteNamed(refs, ownerName)
 		if len(external) > 0 {
+			hardLimitCleanupActionTotal.WithLabelValues(tenant, actionSkippedExternalRef, releaseShapeKsvc).Inc()
 			r.Recorder.Eventf(cfg, corev1.EventTypeWarning, "HardLimitCleanupSkipped",
 				"not deleting Service %s: still referenced by route(s) %v outside its own ksvc -- deleting would break their live traffic",
 				ownerName, routeNames(external))
@@ -136,9 +166,11 @@ func (r *HardLimitCleanupReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		svc.SetNamespace(cfg.GetNamespace())
 
 		if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
+			hardLimitCleanupActionTotal.WithLabelValues(tenant, actionFailed, releaseShapeKsvc).Inc()
 			r.Recorder.Eventf(cfg, corev1.EventTypeWarning, "HardLimitCleanupFailed", "failed to delete owning Service %s: %s", ownerName, err.Error())
 			return ctrl.Result{}, err
 		}
+		hardLimitCleanupActionTotal.WithLabelValues(tenant, actionDeleted, releaseShapeKsvc).Inc()
 		r.Recorder.Eventf(cfg, corev1.EventTypeNormal, "HardLimitCleanupDeleted",
 			"deleted Service %s (tenant=%s reason=%s), cascading to its Configuration and Route", ownerName, tenant, reason)
 		return ctrl.Result{}, nil
@@ -164,6 +196,7 @@ func (r *HardLimitCleanupReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 	if len(shared) > 0 {
+		hardLimitCleanupActionTotal.WithLabelValues(tenant, actionSkippedSplitRef, releaseShapeStandalone).Inc()
 		r.Recorder.Eventf(cfg, corev1.EventTypeWarning, "HardLimitCleanupSkipped",
 			"not deleting: still referenced by route(s) %v with traffic split to another Configuration -- deleting would break their live traffic",
 			routeNames(shared))
@@ -172,15 +205,18 @@ func (r *HardLimitCleanupReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	for i := range exclusive {
 		if err := r.Delete(ctx, &exclusive[i]); err != nil && !apierrors.IsNotFound(err) {
+			hardLimitCleanupActionTotal.WithLabelValues(tenant, actionFailed, releaseShapeStandalone).Inc()
 			r.Recorder.Eventf(cfg, corev1.EventTypeWarning, "HardLimitCleanupFailed", "failed to delete Route %s: %s", exclusive[i].GetName(), err.Error())
 			return ctrl.Result{}, err
 		}
 	}
 
 	if err := r.Delete(ctx, cfg); err != nil && !apierrors.IsNotFound(err) {
+		hardLimitCleanupActionTotal.WithLabelValues(tenant, actionFailed, releaseShapeStandalone).Inc()
 		r.Recorder.Eventf(cfg, corev1.EventTypeWarning, "HardLimitCleanupFailed", "failed to delete Configuration: %s", err.Error())
 		return ctrl.Result{}, err
 	}
+	hardLimitCleanupActionTotal.WithLabelValues(tenant, actionDeleted, releaseShapeStandalone).Inc()
 	r.Recorder.Eventf(cfg, corev1.EventTypeNormal, "HardLimitCleanupDeleted",
 		"deleted standalone Configuration and %d associated Route(s) (tenant=%s reason=%s)", len(exclusive), tenant, reason)
 	return ctrl.Result{}, nil

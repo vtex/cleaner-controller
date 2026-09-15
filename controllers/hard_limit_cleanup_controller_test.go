@@ -6,6 +6,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -76,6 +77,8 @@ var _ = Describe("HardLimitCleanup controller", func() {
 
 	It("deletes the owning Service for a ksvc-owned marked Configuration", func() {
 		name := "hard-limit-ksvc-owned"
+		before := testutil.ToFloat64(hardLimitCleanupActionTotal.WithLabelValues("tenant1", actionDeleted, releaseShapeKsvc))
+
 		svc := buildHardLimitService(name)
 		Expect(k8sClient.Create(ctx, svc)).To(Succeed())
 
@@ -87,11 +90,14 @@ var _ = Describe("HardLimitCleanup controller", func() {
 			found.SetGroupVersionKind(knativeServiceGVK)
 			return k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: ConditionalTTLNamespace}, found)
 		}, timeout, interval).ShouldNot(Succeed())
+
+		Expect(testutil.ToFloat64(hardLimitCleanupActionTotal.WithLabelValues("tenant1", actionDeleted, releaseShapeKsvc)) - before).To(Equal(1.0))
 	})
 
 	It("deletes a standalone marked Configuration and its exclusive Route", func() {
 		configName := "hard-limit-standalone"
 		routeName := "hard-limit-standalone-route"
+		before := testutil.ToFloat64(hardLimitCleanupActionTotal.WithLabelValues("tenant1", actionDeleted, releaseShapeStandalone))
 
 		route := buildHardLimitRoute(routeName, configName)
 		Expect(k8sClient.Create(ctx, route)).To(Succeed())
@@ -123,12 +129,15 @@ var _ = Describe("HardLimitCleanup controller", func() {
 			found.SetGroupVersionKind(knativeRouteGVK)
 			return k8sClient.Get(ctx, types.NamespacedName{Name: routeName, Namespace: ConditionalTTLNamespace}, found)
 		}, timeout, interval).ShouldNot(Succeed())
+
+		Expect(testutil.ToFloat64(hardLimitCleanupActionTotal.WithLabelValues("tenant1", actionDeleted, releaseShapeStandalone)) - before).To(Equal(1.0))
 	})
 
 	It("never deletes a standalone Configuration whose Route traffic is split with another Configuration", func() {
 		configName := "hard-limit-shared-route-victim"
 		siblingConfigName := "hard-limit-shared-route-sibling"
 		routeName := "hard-limit-shared-route"
+		before := testutil.ToFloat64(hardLimitCleanupActionTotal.WithLabelValues("tenant1", actionSkippedSplitRef, releaseShapeStandalone))
 
 		route := buildHardLimitRoute(routeName, configName, siblingConfigName)
 		Expect(k8sClient.Create(ctx, route)).To(Succeed())
@@ -157,6 +166,8 @@ var _ = Describe("HardLimitCleanup controller", func() {
 			found.SetGroupVersionKind(knativeRouteGVK)
 			return k8sClient.Get(ctx, types.NamespacedName{Name: routeName, Namespace: ConditionalTTLNamespace}, found)
 		}, duration, interval).Should(Succeed())
+
+		Expect(testutil.ToFloat64(hardLimitCleanupActionTotal.WithLabelValues("tenant1", actionSkippedSplitRef, releaseShapeStandalone)) - before).To(BeNumerically(">=", 1.0))
 	})
 
 	// TestHardLimitCleanup_KsvcOwnedNeverDeletedWhileExternallyReferenced
@@ -171,6 +182,7 @@ var _ = Describe("HardLimitCleanup controller", func() {
 	It("never deletes a ksvc-owned Service whose Configuration is referenced by an external Route", func() {
 		name := "hard-limit-ksvc-external-ref"
 		aliasRouteName := "hard-limit-ksvc-external-ref-alias"
+		before := testutil.ToFloat64(hardLimitCleanupActionTotal.WithLabelValues("tenant1", actionSkippedExternalRef, releaseShapeKsvc))
 
 		svc := buildHardLimitService(name)
 		Expect(k8sClient.Create(ctx, svc)).To(Succeed())
@@ -202,5 +214,7 @@ var _ = Describe("HardLimitCleanup controller", func() {
 			found.SetGroupVersionKind(knativeRouteGVK)
 			return k8sClient.Get(ctx, types.NamespacedName{Name: aliasRouteName, Namespace: ConditionalTTLNamespace}, found)
 		}, duration, interval).Should(Succeed())
+
+		Expect(testutil.ToFloat64(hardLimitCleanupActionTotal.WithLabelValues("tenant1", actionSkippedExternalRef, releaseShapeKsvc)) - before).To(BeNumerically(">=", 1.0))
 	})
 })
