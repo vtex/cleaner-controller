@@ -61,7 +61,7 @@ var (
 //     pkg/reconciler/service/resources/{configuration,route}.go), so this
 //     deletes the Service and nothing else.
 //   - standalone Configuration+Route pair (no owning Service, e.g.
-//     kobeio): there is no ownerReference tying them together, so this
+//     acmecorp): there is no ownerReference tying them together, so this
 //     deletes both explicitly. A Route is only deleted if every one of
 //     its traffic targets points at this Configuration -- one split
 //     across multiple Configurations (e.g. an in-progress canary) is left

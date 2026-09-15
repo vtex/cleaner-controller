@@ -148,7 +148,7 @@ model {
           }
         }
 
-        hardLimitDeleter = component 'hard-limit deleter' 'Two release shapes: ksvc-owned (Configuration has an owning Service) deletes the Service, cascading to Configuration+Route automatically; standalone Configuration+Route (no owning Service, e.g. kobeio) deletes both explicitly, skipping any Route whose traffic is split with a sibling Configuration to avoid cutting its live traffic. proxy-launcher never deletes anything itself.' 'Go' {
+        hardLimitDeleter = component 'hard-limit deleter' 'Two release shapes: ksvc-owned (Configuration has an owning Service) deletes the Service, cascading to Configuration+Route automatically; standalone Configuration+Route (no owning Service, e.g. acmecorp) deletes both explicitly, skipping any Route whose traffic is split with a sibling Configuration to avoid cutting its live traffic. proxy-launcher never deletes anything itself.' 'Go' {
           style {
             color vtexRed
           }
