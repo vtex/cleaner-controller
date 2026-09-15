@@ -29,7 +29,7 @@ import (
 func TestHandleUpdateErr(t *testing.T) {
 	conflictErr := apierrors.NewConflict(
 		schema.GroupResource{Group: "cleaner.vtex.io", Resource: "conditionalttls"},
-		"sfj-c5bc713--umbroco",
+		"sfj-c5bc713--examplecorp",
 		errors.New("the object has been modified; please apply your changes to the latest version and try again"),
 	)
 
@@ -53,7 +53,7 @@ func TestHandleUpdateErr(t *testing.T) {
 
 	notFoundErr := apierrors.NewNotFound(
 		schema.GroupResource{Group: "cleaner.vtex.io", Resource: "conditionalttls"},
-		"sfj-c5bc713--umbroco",
+		"sfj-c5bc713--examplecorp",
 	)
 	res, err = handleUpdateErr(logr.Discard(), notFoundErr)
 	if err != nil {

@@ -58,11 +58,11 @@ func TestIsReleaseNotFoundErr(t *testing.T) {
 	}
 }
 
-// TestHelmReleaseFinalizer_AlreadyGone reproduces the tupan/trx incident: a
-// ConditionalTTL's release-finalizer targeting a Helm release that no
-// longer exists in storage. Both action.Get and action.Uninstall need a
-// working KubeClient just to check IsReachable() before touching storage,
-// so PrintingKubeClient (Helm's own no-op test double, writing to
+// TestHelmReleaseFinalizer_AlreadyGone reproduces a real production
+// incident: a ConditionalTTL's release-finalizer targeting a Helm release
+// that no longer exists in storage. Both action.Get and action.Uninstall
+// need a working KubeClient just to check IsReachable() before touching
+// storage, so PrintingKubeClient (Helm's own no-op test double, writing to
 // io.Discard) stands in for one - it never talks to a real cluster.
 func TestHelmReleaseFinalizer_AlreadyGone(t *testing.T) {
 	cfg := &action.Configuration{
@@ -75,7 +75,7 @@ func TestHelmReleaseFinalizer_AlreadyGone(t *testing.T) {
 	cTTL := &cleanerv1alpha1.ConditionalTTL{
 		Spec: cleanerv1alpha1.ConditionalTTLSpec{
 			Helm: &cleanerv1alpha1.HelmConfig{
-				Release: "sfj-2f40163--tupan",
+				Release: "sfj-2f40163--examplecorp",
 				Delete:  true,
 			},
 		},
