@@ -26,11 +26,14 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 const (
@@ -42,9 +45,16 @@ const (
 	releaseShapeStandalone = "standalone"
 
 	actionDeleted            = "deleted"
+	actionAlreadyGone        = "already_gone"
 	actionFailed             = "failed"
 	actionSkippedExternalRef = "skipped_external_reference"
 	actionSkippedSplitRef    = "skipped_split_reference"
+
+	// knativeConfigurationLabel is the label Knative stamps on every
+	// Revision naming its owning Configuration -- serving.ConfigurationLabelKey
+	// in knative.dev/serving, spelled out here since only the API types
+	// are vendored, not that reconciler-internal constants package.
+	knativeConfigurationLabel = "serving.knative.dev/configuration"
 
 	// serviceKnativeDev is the Knative Serving API group, shared by every
 	// GVK below plus idle_knative_cleanup_controller.go's own
@@ -63,6 +73,7 @@ var (
 	knativeConfigurationGVK = schema.GroupVersionKind{Group: serviceKnativeDev, Version: "v1", Kind: "Configuration"}
 	knativeRouteGVK         = schema.GroupVersionKind{Group: serviceKnativeDev, Version: "v1", Kind: "Route"}
 	knativeRouteListGVK     = schema.GroupVersionKind{Group: serviceKnativeDev, Version: "v1", Kind: "RouteList"}
+	knativeRevisionGVK      = schema.GroupVersionKind{Group: serviceKnativeDev, Version: "v1", Kind: "Revision"}
 )
 
 // hardLimitCleanupActionTotal counts every hard-limit cleanup reconcile
@@ -134,6 +145,7 @@ type HardLimitCleanupReconciler struct {
 //+kubebuilder:rbac:groups=serving.knative.dev,resources=configurations,verbs=get;list;watch;delete
 //+kubebuilder:rbac:groups=serving.knative.dev,resources=routes,verbs=get;list;watch;delete
 //+kubebuilder:rbac:groups=serving.knative.dev,resources=services,verbs=get;list;watch;delete
+//+kubebuilder:rbac:groups=serving.knative.dev,resources=revisions,verbs=get
 //+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *HardLimitCleanupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -151,7 +163,7 @@ func (r *HardLimitCleanupReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	refs, err := r.referencingRoutes(ctx, cfg.GetNamespace(), cfg.GetName())
 	if err != nil {
-		log.Error(err, "failed to list routes referencing the marked Configuration")
+		log.Error(err, "failed to resolve routes referencing the marked Configuration")
 		return ctrl.Result{}, err
 	}
 
@@ -183,7 +195,14 @@ func (r *HardLimitCleanupReconciler) reconcileKsvcOwned(ctx context.Context, cfg
 	svc.SetName(ownerName)
 	svc.SetNamespace(cfg.GetNamespace())
 
-	if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.Delete(ctx, svc); err != nil {
+		if apierrors.IsNotFound(err) {
+			// Already gone -- a prior reconcile (or something external)
+			// deleted it. Nothing to do, and this isn't a "deleted"
+			// outcome for metrics/events: no delete happened just now.
+			hardLimitCleanupActionTotal.WithLabelValues(tenant, actionAlreadyGone, releaseShapeKsvc).Inc()
+			return ctrl.Result{}, nil
+		}
 		hardLimitCleanupActionTotal.WithLabelValues(tenant, actionFailed, releaseShapeKsvc).Inc()
 		r.Recorder.Eventf(cfg, corev1.EventTypeWarning, "HardLimitCleanupFailed", "failed to delete owning Service %s: %s", ownerName, err.Error())
 		return ctrl.Result{}, err
@@ -205,7 +224,7 @@ func (r *HardLimitCleanupReconciler) reconcileStandalone(ctx context.Context, cf
 	tenant := cfg.GetAnnotations()[hardLimitTenantAnnotation]
 	reason := cfg.GetAnnotations()[hardLimitReasonAnnotation]
 
-	exclusive, shared, err := partitionRoutesByExclusivity(refs, cfg.GetName())
+	exclusive, shared, err := r.partitionRoutesByExclusivity(ctx, cfg.GetNamespace(), refs, cfg.GetName())
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -225,7 +244,11 @@ func (r *HardLimitCleanupReconciler) reconcileStandalone(ctx context.Context, cf
 		}
 	}
 
-	if err := r.Delete(ctx, cfg); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.Delete(ctx, cfg); err != nil {
+		if apierrors.IsNotFound(err) {
+			hardLimitCleanupActionTotal.WithLabelValues(tenant, actionAlreadyGone, releaseShapeStandalone).Inc()
+			return ctrl.Result{}, nil
+		}
 		hardLimitCleanupActionTotal.WithLabelValues(tenant, actionFailed, releaseShapeStandalone).Inc()
 		r.Recorder.Eventf(cfg, corev1.EventTypeWarning, "HardLimitCleanupFailed", "failed to delete Configuration: %s", err.Error())
 		return ctrl.Result{}, err
@@ -239,13 +262,17 @@ func (r *HardLimitCleanupReconciler) reconcileStandalone(ctx context.Context, cf
 // partitionRoutesByExclusivity splits refs into routes whose traffic
 // points exclusively at configName and routes that share traffic with at
 // least one other Configuration too.
-func partitionRoutesByExclusivity(refs []unstructured.Unstructured, configName string) (exclusive, shared []unstructured.Unstructured, err error) {
+func (r *HardLimitCleanupReconciler) partitionRoutesByExclusivity(ctx context.Context, namespace string, refs []unstructured.Unstructured, configName string) (exclusive, shared []unstructured.Unstructured, err error) {
 	for _, route := range refs {
 		targets, _, err := unstructured.NestedSlice(route.Object, "spec", "traffic")
 		if err != nil {
 			return nil, nil, fmt.Errorf("reading spec.traffic for route %s: %w", route.GetName(), err)
 		}
-		if trafficTargetsOnly(targets, configName) {
+		only, err := r.trafficTargetsOnly(ctx, namespace, targets, configName)
+		if err != nil {
+			return nil, nil, err
+		}
+		if only {
 			exclusive = append(exclusive, route)
 		} else {
 			shared = append(shared, route)
@@ -268,10 +295,10 @@ func serviceOwner(cfg *unstructured.Unstructured) (name string, ok bool) {
 }
 
 // referencingRoutes returns every Route in namespace with at least one
-// spec.traffic entry naming configName as its configurationName --
-// regardless of who owns the Route or whether that traffic is shared with
-// another Configuration. Deleting a Configuration any of these still
-// reference would break their live traffic.
+// spec.traffic entry resolving to configName -- regardless of who owns
+// the Route or whether that traffic is shared with another Configuration.
+// Deleting a Configuration any of these still reference would break
+// their live traffic.
 func (r *HardLimitCleanupReconciler) referencingRoutes(ctx context.Context, namespace, configName string) ([]unstructured.Unstructured, error) {
 	var routes unstructured.UnstructuredList
 	routes.SetGroupVersionKind(knativeRouteListGVK)
@@ -285,47 +312,89 @@ func (r *HardLimitCleanupReconciler) referencingRoutes(ctx context.Context, name
 		if err != nil {
 			return nil, fmt.Errorf("reading spec.traffic for route %s: %w", route.GetName(), err)
 		}
-		if !found || !referencesConfig(targets, configName) {
+		if !found {
 			continue
 		}
-		matches = append(matches, route)
+		references, err := r.referencesConfig(ctx, namespace, targets, configName)
+		if err != nil {
+			return nil, err
+		}
+		if references {
+			matches = append(matches, route)
+		}
 	}
 	return matches, nil
 }
 
 // referencesConfig reports whether at least one entry in a Route's
-// spec.traffic list names configName as its configurationName.
-func referencesConfig(targets []interface{}, configName string) bool {
+// spec.traffic list resolves to configName -- directly via
+// configurationName, or indirectly via revisionName (see
+// effectiveConfigurationName).
+func (r *HardLimitCleanupReconciler) referencesConfig(ctx context.Context, namespace string, targets []interface{}, configName string) (bool, error) {
 	for _, t := range targets {
 		m, ok := t.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		if name, _, _ := unstructured.NestedString(m, "configurationName"); name == configName {
-			return true
+		name, err := r.effectiveConfigurationName(ctx, namespace, m)
+		if err != nil {
+			return false, err
+		}
+		if name == configName {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // trafficTargetsOnly reports whether every entry in a Route's
-// spec.traffic list names configName as its configurationName -- i.e.
-// none of its traffic is shared with a different Configuration.
-func trafficTargetsOnly(targets []interface{}, configName string) bool {
+// spec.traffic list resolves to configName -- i.e. none of its traffic is
+// shared with a different Configuration.
+func (r *HardLimitCleanupReconciler) trafficTargetsOnly(ctx context.Context, namespace string, targets []interface{}, configName string) (bool, error) {
 	if len(targets) == 0 {
-		return false
+		return false, nil
 	}
 	for _, t := range targets {
 		m, ok := t.(map[string]interface{})
 		if !ok {
-			return false
+			return false, nil
 		}
-		name, _, _ := unstructured.NestedString(m, "configurationName")
+		name, err := r.effectiveConfigurationName(ctx, namespace, m)
+		if err != nil {
+			return false, err
+		}
 		if name != configName {
-			return false
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
+}
+
+// effectiveConfigurationName resolves the Configuration a single
+// spec.traffic entry sends its traffic to -- directly via
+// configurationName, or, when the entry instead pins traffic to a
+// specific Revision (a normal Knative pattern for canary/rollback
+// pinning), by resolving revisionName back to its owning Configuration
+// via the label Knative stamps on every Revision. Returns "" if the
+// entry has neither field set or the Revision is already gone.
+func (r *HardLimitCleanupReconciler) effectiveConfigurationName(ctx context.Context, namespace string, target map[string]interface{}) (string, error) {
+	if name, _, _ := unstructured.NestedString(target, "configurationName"); name != "" {
+		return name, nil
+	}
+	revisionName, _, _ := unstructured.NestedString(target, "revisionName")
+	if revisionName == "" {
+		return "", nil
+	}
+
+	rev := &unstructured.Unstructured{}
+	rev.SetGroupVersionKind(knativeRevisionGVK)
+	if err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: revisionName}, rev); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("resolving revision %s to its owning configuration: %w", revisionName, err)
+	}
+	return rev.GetLabels()[knativeConfigurationLabel], nil
 }
 
 // excludeRouteNamed returns routes without the one (if any) named name.
@@ -349,10 +418,61 @@ func routeNames(routes []unstructured.Unstructured) []string {
 }
 
 // SetupWithManager sets up the controller with the Manager.
+//
+// Also watches Route: without it, a Configuration skipped because a
+// Route referenced it (see reconcileKsvcOwned/reconcileStandalone) would
+// never be reconciled again once that Route's traffic changes or it's
+// deleted, since proxy-launcher never re-touches an already-marked
+// Configuration (pkg/limiter's partitionReleases excludes marked ones
+// from consideration) -- nothing else would ever ask Kubernetes to
+// reconcile it. mapRouteToConfigurations re-enqueues every Configuration
+// a changed Route's traffic references (before and after the change,
+// since controller-runtime's EnqueueRequestsFromMapFunc maps both
+// ObjectOld and ObjectNew on updates), so a resolved block is retried
+// promptly instead of leaving the Configuration stuck forever.
 func (r *HardLimitCleanupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	cfg := &unstructured.Unstructured{}
 	cfg.SetGroupVersionKind(knativeConfigurationGVK)
+	route := &unstructured.Unstructured{}
+	route.SetGroupVersionKind(knativeRouteGVK)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(cfg).
+		Watches(route, handler.EnqueueRequestsFromMapFunc(r.mapRouteToConfigurations)).
 		Complete(r)
+}
+
+// mapRouteToConfigurations enqueues a reconcile request for every
+// Configuration a Route's spec.traffic currently references, so changing
+// or deleting a Route re-evaluates whatever Configuration it used to (or
+// now does) block from deletion.
+func (r *HardLimitCleanupReconciler) mapRouteToConfigurations(ctx context.Context, obj client.Object) []reconcile.Request {
+	route, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return nil
+	}
+	targets, found, err := unstructured.NestedSlice(route.Object, "spec", "traffic")
+	if !found || err != nil {
+		return nil
+	}
+
+	seen := map[string]struct{}{}
+	var requests []reconcile.Request
+	for _, t := range targets {
+		m, ok := t.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, err := r.effectiveConfigurationName(ctx, route.GetNamespace(), m)
+		if err != nil || name == "" {
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: name, Namespace: route.GetNamespace()},
+		})
+	}
+	return requests
 }

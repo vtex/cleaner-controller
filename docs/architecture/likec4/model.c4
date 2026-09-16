@@ -130,7 +130,7 @@ model {
         idleAnnotator -> idleDeleter 'delete after threshold'
       }
 
-      hardLimitReconciler = component 'HardLimitCleanupReconciler' 'Opt-in via HARD_LIMIT_CLEANUP_ENABLED. Watches Knative Configurations for cleaner.vtex.io/hard-limit-exceeded=true (written externally by faststore-proxy-launcher release limiter, PR #760/#761, when a tenant exceeds their active-release cap) and deletes the marked release.' 'Go' {
+      hardLimitReconciler = component 'HardLimitCleanupReconciler' 'Opt-in via HARD_LIMIT_CLEANUP_ENABLED. Watches Knative Configurations for cleaner.vtex.io/hard-limit-exceeded=true (written externally by faststore-proxy-launcher release limiter, PR #760/#761, when a tenant exceeds their active-release cap) and deletes the marked release. Also watches Route: a skip decision would otherwise be permanent, since nothing else ever re-touches an already-marked Configuration.' 'Go' {
         style {
           color vtexBlack
           icon tech:go
@@ -148,7 +148,7 @@ model {
           }
         }
 
-        hardLimitRouteGuard = component 'route reference guard' 'Lists every Route in the namespace before anything is deleted. Found live on dr0: a tenants stable "current production" Route (unrelated to any one release own ksvc) kept pointing at a Configuration after its owning Service was deleted, since that only cascades to the Route the Service itself owns -- the alias Route survived but broke. Now any Route referencing the marked Configuration -- owned by its ksvc or not -- blocks the deletion entirely.' 'Go' {
+        hardLimitRouteGuard = component 'route reference guard' 'Lists every Route in the namespace before anything is deleted. Found live on dr0: a tenants stable "current production" Route (unrelated to any one release own ksvc) kept pointing at a Configuration after its owning Service was deleted, since that only cascades to the Route the Service itself owns -- the alias Route survived but broke. Now any Route referencing the marked Configuration -- owned by its ksvc or not -- blocks the deletion entirely. A reference counts whether the traffic entry names the Configuration directly or pins to one of its Revisions by name (resolved via the label Knative stamps on every Revision) -- a code-review catch after the dr0 fix, since the first version only checked the direct name.' 'Go' {
           style {
             color vtexAmber
           }

@@ -58,6 +58,12 @@ rules:
 - apiGroups:
   - serving.knative.dev
   resources:
+  - revisions
+  verbs:
+  - get
+- apiGroups:
+  - serving.knative.dev
+  resources:
   - services
   verbs:
   - delete
