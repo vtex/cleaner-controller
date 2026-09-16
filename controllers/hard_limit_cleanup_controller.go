@@ -149,9 +149,6 @@ func (r *HardLimitCleanupReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, nil
 	}
 
-	tenant := cfg.GetAnnotations()[hardLimitTenantAnnotation]
-	reason := cfg.GetAnnotations()[hardLimitReasonAnnotation]
-
 	refs, err := r.referencingRoutes(ctx, cfg.GetNamespace(), cfg.GetName())
 	if err != nil {
 		log.Error(err, "failed to list routes referencing the marked Configuration")
@@ -159,53 +156,58 @@ func (r *HardLimitCleanupReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	if ownerName, ok := serviceOwner(cfg); ok {
-		// The Service's own Route shares its name (Knative's own naming
-		// convention) and dies with it in the cascade below -- it's not
-		// an external dependency. Anything else referencing this
-		// Configuration is.
-		external := excludeRouteNamed(refs, ownerName)
-		if len(external) > 0 {
-			hardLimitCleanupActionTotal.WithLabelValues(tenant, actionSkippedExternalRef, releaseShapeKsvc).Inc()
-			r.Recorder.Eventf(cfg, corev1.EventTypeWarning, "HardLimitCleanupSkipped",
-				"not deleting Service %s: still referenced by route(s) %v outside its own ksvc -- deleting would break their live traffic",
-				ownerName, routeNames(external))
-			return ctrl.Result{}, nil
-		}
+		return r.reconcileKsvcOwned(ctx, cfg, ownerName, refs)
+	}
+	return r.reconcileStandalone(ctx, cfg, refs)
+}
 
-		svc := &unstructured.Unstructured{}
-		svc.SetGroupVersionKind(knativeServiceGVK)
-		svc.SetName(ownerName)
-		svc.SetNamespace(cfg.GetNamespace())
+// reconcileKsvcOwned handles a Configuration owned by a Knative Service:
+// safe to delete only if no Route *other than the one the Service itself
+// owns* (same name, by Knative's own convention -- dies in the cascade
+// below regardless) still references it.
+func (r *HardLimitCleanupReconciler) reconcileKsvcOwned(ctx context.Context, cfg *unstructured.Unstructured, ownerName string, refs []unstructured.Unstructured) (ctrl.Result, error) {
+	tenant := cfg.GetAnnotations()[hardLimitTenantAnnotation]
+	reason := cfg.GetAnnotations()[hardLimitReasonAnnotation]
 
-		if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
-			hardLimitCleanupActionTotal.WithLabelValues(tenant, actionFailed, releaseShapeKsvc).Inc()
-			r.Recorder.Eventf(cfg, corev1.EventTypeWarning, "HardLimitCleanupFailed", "failed to delete owning Service %s: %s", ownerName, err.Error())
-			return ctrl.Result{}, err
-		}
-		hardLimitCleanupActionTotal.WithLabelValues(tenant, actionDeleted, releaseShapeKsvc).Inc()
-		r.Recorder.Eventf(cfg, corev1.EventTypeNormal, "HardLimitCleanupDeleted",
-			"deleted Service %s (tenant=%s reason=%s), cascading to its Configuration and Route", ownerName, tenant, reason)
+	external := excludeRouteNamed(refs, ownerName)
+	if len(external) > 0 {
+		hardLimitCleanupActionTotal.WithLabelValues(tenant, actionSkippedExternalRef, releaseShapeKsvc).Inc()
+		r.Recorder.Eventf(cfg, corev1.EventTypeWarning, "HardLimitCleanupSkipped",
+			"not deleting Service %s: still referenced by route(s) %v outside its own ksvc -- deleting would break their live traffic",
+			ownerName, routeNames(external))
 		return ctrl.Result{}, nil
 	}
 
-	// Standalone: split referencing routes into ones dedicated solely to
-	// this Configuration (safe to delete alongside it) and ones sharing
-	// traffic with another Configuration too (e.g. a stable alias Route,
-	// or an in-progress canary). Any of the latter blocks the whole
-	// deletion -- not just that Route -- since removing the Configuration
-	// would break its traffic regardless of whether the Route itself is
-	// touched.
-	var exclusive, shared []unstructured.Unstructured
-	for _, route := range refs {
-		targets, _, err := unstructured.NestedSlice(route.Object, "spec", "traffic")
-		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("reading spec.traffic for route %s: %w", route.GetName(), err)
-		}
-		if trafficTargetsOnly(targets, cfg.GetName()) {
-			exclusive = append(exclusive, route)
-		} else {
-			shared = append(shared, route)
-		}
+	svc := &unstructured.Unstructured{}
+	svc.SetGroupVersionKind(knativeServiceGVK)
+	svc.SetName(ownerName)
+	svc.SetNamespace(cfg.GetNamespace())
+
+	if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
+		hardLimitCleanupActionTotal.WithLabelValues(tenant, actionFailed, releaseShapeKsvc).Inc()
+		r.Recorder.Eventf(cfg, corev1.EventTypeWarning, "HardLimitCleanupFailed", "failed to delete owning Service %s: %s", ownerName, err.Error())
+		return ctrl.Result{}, err
+	}
+	hardLimitCleanupActionTotal.WithLabelValues(tenant, actionDeleted, releaseShapeKsvc).Inc()
+	r.Recorder.Eventf(cfg, corev1.EventTypeNormal, "HardLimitCleanupDeleted",
+		"deleted Service %s (tenant=%s reason=%s), cascading to its Configuration and Route", ownerName, tenant, reason)
+	return ctrl.Result{}, nil
+}
+
+// reconcileStandalone handles a Configuration with no owning Service:
+// splits referencing routes into ones dedicated solely to it (safe to
+// delete alongside it) and ones sharing traffic with another
+// Configuration too (e.g. a stable alias Route, or an in-progress
+// canary). Any of the latter blocks the whole deletion -- not just that
+// Route -- since removing the Configuration would break its traffic
+// regardless of whether the Route itself is touched.
+func (r *HardLimitCleanupReconciler) reconcileStandalone(ctx context.Context, cfg *unstructured.Unstructured, refs []unstructured.Unstructured) (ctrl.Result, error) {
+	tenant := cfg.GetAnnotations()[hardLimitTenantAnnotation]
+	reason := cfg.GetAnnotations()[hardLimitReasonAnnotation]
+
+	exclusive, shared, err := partitionRoutesByExclusivity(refs, cfg.GetName())
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 	if len(shared) > 0 {
 		hardLimitCleanupActionTotal.WithLabelValues(tenant, actionSkippedSplitRef, releaseShapeStandalone).Inc()
@@ -232,6 +234,24 @@ func (r *HardLimitCleanupReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	r.Recorder.Eventf(cfg, corev1.EventTypeNormal, "HardLimitCleanupDeleted",
 		"deleted standalone Configuration and %d associated Route(s) (tenant=%s reason=%s)", len(exclusive), tenant, reason)
 	return ctrl.Result{}, nil
+}
+
+// partitionRoutesByExclusivity splits refs into routes whose traffic
+// points exclusively at configName and routes that share traffic with at
+// least one other Configuration too.
+func partitionRoutesByExclusivity(refs []unstructured.Unstructured, configName string) (exclusive, shared []unstructured.Unstructured, err error) {
+	for _, route := range refs {
+		targets, _, err := unstructured.NestedSlice(route.Object, "spec", "traffic")
+		if err != nil {
+			return nil, nil, fmt.Errorf("reading spec.traffic for route %s: %w", route.GetName(), err)
+		}
+		if trafficTargetsOnly(targets, configName) {
+			exclusive = append(exclusive, route)
+		} else {
+			shared = append(shared, route)
+		}
+	}
+	return exclusive, shared, nil
 }
 
 // serviceOwner returns the name of the Knative Service that controls cfg,

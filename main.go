@@ -47,6 +47,22 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
+// cleanerControllerEventSource is the name every reconciler's event
+// recorder is registered under -- shared so events from any of them show
+// up attributed to "cleaner-controller" (e.g. in `kubectl describe`),
+// not the individual reconciler type.
+const cleanerControllerEventSource = "cleaner-controller"
+
+// exitOnControllerSetupErr logs and exits if SetupWithManager failed,
+// shared by every reconciler below so their error message/exit behavior
+// can't drift from each other.
+func exitOnControllerSetupErr(err error, controllerName string) {
+	if err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", controllerName)
+		os.Exit(1)
+	}
+}
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
@@ -116,16 +132,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controllers.ConditionalTTLReconciler{
+	exitOnControllerSetupErr((&controllers.ConditionalTTLReconciler{
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),
 		Config:            mgr.GetConfig(),
-		Recorder:          mgr.GetEventRecorderFor("cleaner-controller"),
+		Recorder:          mgr.GetEventRecorderFor(cleanerControllerEventSource),
 		CloudEventsClient: cec,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ConditionalTTL")
-		os.Exit(1)
-	}
+	}).SetupWithManager(mgr), "ConditionalTTL")
 
 	if os.Getenv("IDLE_KNATIVE_CLEANUP_ENABLED") == "true" {
 		thresholdStr := os.Getenv("IDLE_KNATIVE_CLEANUP_THRESHOLD")
@@ -137,25 +150,19 @@ func main() {
 			setupLog.Error(err, "invalid IDLE_KNATIVE_CLEANUP_THRESHOLD", "value", thresholdStr)
 			os.Exit(1)
 		}
-		if err = (&controllers.IdleKnativeCleanupReconciler{
+		exitOnControllerSetupErr((&controllers.IdleKnativeCleanupReconciler{
 			Client:    mgr.GetClient(),
 			Scheme:    mgr.GetScheme(),
-			Recorder:  mgr.GetEventRecorderFor("cleaner-controller"),
+			Recorder:  mgr.GetEventRecorderFor(cleanerControllerEventSource),
 			Threshold: threshold,
-		}).SetupWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create controller", "controller", "IdleKnativeCleanup")
-			os.Exit(1)
-		}
+		}).SetupWithManager(mgr), "IdleKnativeCleanup")
 	}
 	if os.Getenv("HARD_LIMIT_CLEANUP_ENABLED") == "true" {
-		if err = (&controllers.HardLimitCleanupReconciler{
+		exitOnControllerSetupErr((&controllers.HardLimitCleanupReconciler{
 			Client:   mgr.GetClient(),
 			Scheme:   mgr.GetScheme(),
-			Recorder: mgr.GetEventRecorderFor("cleaner-controller"),
-		}).SetupWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create controller", "controller", "HardLimitCleanup")
-			os.Exit(1)
-		}
+			Recorder: mgr.GetEventRecorderFor(cleanerControllerEventSource),
+		}).SetupWithManager(mgr), "HardLimitCleanup")
 	}
 	//+kubebuilder:scaffold:builder
 
