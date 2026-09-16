@@ -44,7 +44,7 @@ const (
 	knativeServiceLabel       = "serving.knative.dev/service"
 )
 
-var knativeServiceGVK = schema.GroupVersionKind{Group: "serving.knative.dev", Version: "v1", Kind: "Service"}
+var knativeServiceGVK = schema.GroupVersionKind{Group: serviceKnativeDev, Version: "v1", Kind: "Service"}
 
 // isExcluded reports whether the Service opted out of idle cleanup via the
 // cleaner.vtex.io/exclude annotation.

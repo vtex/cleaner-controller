@@ -45,12 +45,24 @@ const (
 	actionFailed             = "failed"
 	actionSkippedExternalRef = "skipped_external_reference"
 	actionSkippedSplitRef    = "skipped_split_reference"
+
+	// serviceKnativeDev is the Knative Serving API group, shared by every
+	// GVK below plus idle_knative_cleanup_controller.go's own
+	// knativeServiceGVK (same package, so it's already in scope there
+	// too). SonarQube (go:S1192) flags "serving.knative.dev" as a
+	// duplicated literal once it appears 3+ times in a file -- this
+	// constant is that fix, not a claim that every instance of the
+	// string in the package is now gone: RBAC marker comments
+	// (//+kubebuilder:rbac:groups=serving.knative.dev,...) still spell it
+	// out literally, since controller-gen parses those as plain text and
+	// can't dereference a Go identifier.
+	serviceKnativeDev = "serving.knative.dev"
 )
 
 var (
-	knativeConfigurationGVK = schema.GroupVersionKind{Group: "serving.knative.dev", Version: "v1", Kind: "Configuration"}
-	knativeRouteGVK         = schema.GroupVersionKind{Group: "serving.knative.dev", Version: "v1", Kind: "Route"}
-	knativeRouteListGVK     = schema.GroupVersionKind{Group: "serving.knative.dev", Version: "v1", Kind: "RouteList"}
+	knativeConfigurationGVK = schema.GroupVersionKind{Group: serviceKnativeDev, Version: "v1", Kind: "Configuration"}
+	knativeRouteGVK         = schema.GroupVersionKind{Group: serviceKnativeDev, Version: "v1", Kind: "Route"}
+	knativeRouteListGVK     = schema.GroupVersionKind{Group: serviceKnativeDev, Version: "v1", Kind: "RouteList"}
 )
 
 // hardLimitCleanupActionTotal counts every hard-limit cleanup reconcile
